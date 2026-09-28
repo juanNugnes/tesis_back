@@ -50,6 +50,67 @@ async def test_update_avatar(client):
     response = await client.put(f"/api/v1/profiles/{profile['id']}", json={"avatar": "koala"})
     assert response.status_code == 200
     assert response.json()["avatar"] == "koala"
+    assert response.json()["settings"]["profile_id"] == profile["id"]
+
+
+@pytest.mark.asyncio
+async def test_update_alias(client):
+    profile = await create_profile(client)
+    response = await client.put(f"/api/v1/profiles/{profile['id']}", json={"alias": "Perfil B"})
+    assert response.status_code == 200
+    assert response.json()["alias"] == "Perfil B"
+
+
+@pytest.mark.asyncio
+async def test_update_age(client):
+    profile = await create_profile(client)
+    response = await client.put(f"/api/v1/profiles/{profile['id']}", json={"age": 10})
+    assert response.status_code == 200
+    assert response.json()["age"] == 10
+
+
+@pytest.mark.asyncio
+async def test_update_active(client):
+    profile = await create_profile(client)
+    response = await client.put(f"/api/v1/profiles/{profile['id']}", json={"active": False})
+    assert response.status_code == 200
+    assert response.json()["active"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_multiple_profile_fields(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}",
+        json={"alias": "Perfil C", "age": 11, "avatar": "lion", "active": False},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["alias"] == "Perfil C"
+    assert result["age"] == 11
+    assert result["avatar"] == "lion"
+    assert result["active"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_profile_returns_detail_and_preserves_settings(client):
+    profile = await create_profile(client)
+    settings_url = f"/api/v1/profiles/{profile['id']}/settings"
+    settings_payload = {
+        "school_start": "08:00",
+        "school_end": "12:30",
+        "sleep_start": "22:00",
+        "sleep_end": "07:00",
+    }
+    settings_response = await client.put(settings_url, json=settings_payload)
+    assert settings_response.status_code == 200
+
+    response = await client.put(f"/api/v1/profiles/{profile['id']}", json={"alias": "Perfil actualizado"})
+    assert response.status_code == 200
+    result = response.json()
+    assert set(result) == {"id", "alias", "age", "avatar", "active", "created_at", "updated_at", "settings"}
+    assert result["settings"] == settings_response.json()
+    assert (await client.get(settings_url)).json() == settings_response.json()
 
 
 @pytest.mark.asyncio
@@ -141,6 +202,38 @@ async def test_reject_incomplete_schedule_pairs(client, payload):
     profile = await create_profile(client)
     response = await client.put(f"/api/v1/profiles/{profile['id']}/settings", json=payload)
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reject_equal_school_times(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/settings",
+        json={"school_start": "08:00", "school_end": "08:00"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reject_equal_sleep_times(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/settings",
+        json={"school_start": "08:00", "school_end": "12:30", "sleep_start": "22:00", "sleep_end": "22:00"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_allow_sleep_schedule_across_midnight(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/settings",
+        json={"school_start": "08:00", "school_end": "12:30", "sleep_start": "22:00", "sleep_end": "07:00"},
+    )
+    assert response.status_code == 200
+    assert response.json()["sleep_start"] == "22:00:00"
+    assert response.json()["sleep_end"] == "07:00:00"
 
 
 @pytest.mark.asyncio

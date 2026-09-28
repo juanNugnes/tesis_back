@@ -7,7 +7,7 @@ from app.api.dependencies import get_profile
 from app.db.models import Profile
 from app.db.session import get_db
 from app.repositories.profile_repository import ProfileRepository
-from app.schemas.profile import ProfileCreate, ProfileDetailRead, ProfileRead, ProfileUpdate
+from app.schemas.profile import ProfileCreate, ProfileDetailRead, ProfileUpdate
 from app.services.profile_service import ProfileService
 
 router = APIRouter(prefix="/profiles", tags=["profiles"])
@@ -24,6 +24,7 @@ async def read_profile(profile: Profile = Depends(get_profile)):
     return ProfileService.detail(profile)
 
 
-@router.put("/{profile_id}", response_model=ProfileRead)
+@router.put("/{profile_id}", response_model=ProfileDetailRead)
 async def update_profile(data: ProfileUpdate, profile: Profile = Depends(get_profile), db: AsyncSession = Depends(get_db)):
-    return await ProfileRepository(db).update(profile, data)
+    updated_profile = await ProfileRepository(db).update(profile, data)
+    return ProfileService.detail(updated_profile)

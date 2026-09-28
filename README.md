@@ -50,6 +50,8 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `POST /api/v1/profiles`
 - `GET /api/v1/profiles/{profile_id}`
 - `PUT /api/v1/profiles/{profile_id}`
+- `GET /api/v1/profiles/{profile_id}/settings`
+- `PUT /api/v1/profiles/{profile_id}/settings`
 - `POST /api/v1/profiles/{profile_id}/usage`
 - `GET /api/v1/profiles/{profile_id}/usage`
 - `GET /api/v1/profiles/{profile_id}/usage/{date}`

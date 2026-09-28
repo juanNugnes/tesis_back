@@ -28,5 +28,8 @@ class ProfileRepository:
 
     async def update(self, profile: Profile, data: ProfileUpdate) -> Profile:
         for key, value in data.model_dump(exclude_unset=True).items(): setattr(profile, key, value)
-        await self.db.commit(); await self.db.refresh(profile)
-        return profile
+        await self.db.commit()
+        updated_profile = await self.get(profile.id)
+        if updated_profile is None:
+            raise RuntimeError("Updated profile could not be reloaded")
+        return updated_profile
