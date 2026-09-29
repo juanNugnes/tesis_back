@@ -1,3 +1,35 @@
-from app.db.models.entities import Alert, AnalysisResult, AppUsage, Avatar, DailyUsage, Profile, ProfileSettings, RiskLevel
+from app.db.models.entities import (
+    ActivityInterest,
+    ActivityToAvoid,
+    AdaptationType,
+    Alert,
+    AnalysisResult,
+    AppUsage,
+    Avatar,
+    DailyUsage,
+    FunctionalConsideration,
+    Profile,
+    ProfileActivityPreferences,
+    ProfileContext,
+    ProfileContextType,
+    ProfileSettings,
+    RiskLevel,
+)
 
-__all__ = ["Profile", "ProfileSettings", "Avatar", "DailyUsage", "AppUsage", "AnalysisResult", "Alert", "RiskLevel"]
+__all__ = [
+    "Profile",
+    "ProfileSettings",
+    "ProfileContext",
+    "ProfileContextType",
+    "ProfileActivityPreferences",
+    "ActivityInterest",
+    "ActivityToAvoid",
+    "AdaptationType",
+    "FunctionalConsideration",
+    "Avatar",
+    "DailyUsage",
+    "AppUsage",
+    "AnalysisResult",
+    "Alert",
+    "RiskLevel",
+]

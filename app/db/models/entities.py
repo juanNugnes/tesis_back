@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime, time, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -29,6 +29,56 @@ class Avatar(str, enum.Enum):
     butterfly = "butterfly"
 
 
+class ProfileContextType(str, enum.Enum):
+    VACATION = "VACATION"
+    ILLNESS = "ILLNESS"
+    SCHOOL_ACTIVITY = "SCHOOL_ACTIVITY"
+    ROUTINE_CHANGE = "ROUTINE_CHANGE"
+    OTHER = "OTHER"
+
+
+class ActivityInterest(str, enum.Enum):
+    DRAWING_CREATING = "DRAWING_CREATING"
+    READING_STORIES = "READING_STORIES"
+    MUSIC = "MUSIC"
+    GAMES_CHALLENGES = "GAMES_CHALLENGES"
+    OUTDOORS = "OUTDOORS"
+    MOVEMENT = "MOVEMENT"
+    BUILDING = "BUILDING"
+    WRITING = "WRITING"
+    IMAGINATIVE_PLAY = "IMAGINATIVE_PLAY"
+
+
+class AdaptationType(str, enum.Enum):
+    NONE = "NONE"
+    TEMPORARY = "TEMPORARY"
+    PERMANENT = "PERMANENT"
+
+
+class FunctionalConsideration(str, enum.Enum):
+    MOBILITY = "MOBILITY"
+    VISION = "VISION"
+    HEARING = "HEARING"
+    ATTENTION_CONCENTRATION = "ATTENTION_CONCENTRATION"
+    ARMS_HANDS = "ARMS_HANDS"
+    LEGS = "LEGS"
+    COMMUNICATION = "COMMUNICATION"
+    SENSORY_SENSITIVITY = "SENSORY_SENSITIVITY"
+    TEMPORARY_PHYSICAL_DISCOMFORT = "TEMPORARY_PHYSICAL_DISCOMFORT"
+    OTHER = "OTHER"
+
+
+class ActivityToAvoid(str, enum.Enum):
+    RUNNING = "RUNNING"
+    JUMPING = "JUMPING"
+    PROLONGED_STANDING = "PROLONGED_STANDING"
+    ARMS_HANDS_USE = "ARMS_HANDS_USE"
+    VISUAL_PRECISION = "VISUAL_PRECISION"
+    LOUD_SOUNDS = "LOUD_SOUNDS"
+    HIGH_STIMULATION = "HIGH_STIMULATION"
+    PROLONGED_CONCENTRATION = "PROLONGED_CONCENTRATION"
+
+
 class Profile(Base):
     __tablename__ = "profiles"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -40,6 +90,12 @@ class Profile(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     daily_usages: Mapped[list["DailyUsage"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
     settings: Mapped["ProfileSettings | None"] = relationship(back_populates="profile", cascade="all, delete-orphan", uselist=False)
+    contexts: Mapped[list["ProfileContext"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
+    activity_preferences: Mapped["ProfileActivityPreferences | None"] = relationship(
+        back_populates="profile",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class ProfileSettings(Base):
@@ -53,6 +109,35 @@ class ProfileSettings(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     profile: Mapped[Profile] = relationship(back_populates="settings")
+
+
+class ProfileContext(Base):
+    __tablename__ = "profile_contexts"
+    __table_args__ = (Index("ix_profile_contexts_profile_start_date", "profile_id", "start_date"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"))
+    type: Mapped[ProfileContextType] = mapped_column(Enum(ProfileContextType, name="profile_context_type"))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    profile: Mapped[Profile] = relationship(back_populates="contexts")
+
+
+class ProfileActivityPreferences(Base):
+    __tablename__ = "profile_activity_preferences"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), unique=True)
+    interests: Mapped[list[str]] = mapped_column(JSON, default=list)
+    adaptation_type: Mapped[AdaptationType] = mapped_column(Enum(AdaptationType, name="profile_adaptation_type"))
+    considerations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    activities_to_avoid: Mapped[list[str]] = mapped_column(JSON, default=list)
+    additional_notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    profile: Mapped[Profile] = relationship(back_populates="activity_preferences")
 
 
 class DailyUsage(Base):
