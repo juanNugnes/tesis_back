@@ -53,6 +53,12 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `POST /api/v1/profiles/{profile_id}/devices`
 - `POST /api/v1/profiles/{profile_id}/device-link-codes`
 - `POST /api/v1/device-links/claim`
+- `POST /api/v1/profiles/{profile_id}/adult-link-codes`
+- `POST /api/v1/adult/profile-links/claim`
+- `POST /api/v1/auth/adult/otp/request`
+- `POST /api/v1/auth/adult/otp/verify`
+- `GET /api/v1/auth/adult/me`
+- `GET /api/v1/adult/profiles`
 - `GET /api/v1/profiles/{profile_id}/settings`
 - `PUT /api/v1/profiles/{profile_id}/settings`
 - `GET /api/v1/profiles/{profile_id}/activity-preferences`
@@ -172,9 +178,64 @@ POST /api/v1/device-links/claim
 -> Device + ProfileDetailRead
 ```
 
-El codigo `DEVICE_LINK` tiene seis digitos, dura 10 minutos, se almacena como HMAC-SHA256 y se consume una sola vez. No es una identidad permanente ni reemplaza autenticacion adulta. Actualmente no hay ownership, AdultAccount ni JWT: conocer el `profile_id` alcanza para generar un codigo. Antes de produccion se requieren autenticacion, autorizacion, rate limiting y un secreto `DEVICE_LINK_CODE_HASH_SECRET` administrado de forma segura.
+El codigo `DEVICE_LINK` tiene seis digitos, dura 10 minutos, se almacena como HMAC-SHA256 y se consume una sola vez. No es una identidad permanente. Su generacion requiere un JWT adulto y un `AdultProfileLink` activo; el claim sigue siendo publico porque el dispositivo aun esta recuperando su identidad.
 
 `last_seen_at` se inicializa al registrar o vincular el Device, pero esta version no lo actualiza automaticamente en cada request. La concurrencia del claim se protege con locking y consumo condicional en PostgreSQL; falta una prueba de integracion concurrente contra PostgreSQL porque la suite usa SQLite.
+
+## Autenticacion y autorizacion adulta
+
+El flujo adulto MVP usa un OTP numerico de seis digitos y un JWT HS256. El OTP dura 10 minutos, tiene un maximo de 5 intentos y se almacena como HMAC, nunca en texto plano. El JWT contiene solamente `sub`, `type=adult_access`, `iat` y `exp`; los perfiles autorizados se consultan en base de datos en cada operacion.
+
+```text
+POST /api/v1/auth/adult/otp/request
+POST /api/v1/auth/adult/otp/verify -> Bearer token
+GET  /api/v1/auth/adult/me
+GET  /api/v1/adult/profiles
+```
+
+`ADULT_AUTH_JWT_SECRET` es obligatorio y debe tener al menos 32 caracteres. `EXPOSE_DEV_OTP=true` incluye `dev_code` unicamente cuando `ENVIRONMENT=development`; debe permanecer desactivado fuera del desarrollo. No existe envio real de email todavia: `OtpDeliveryService` es el punto de integracion futuro.
+
+Clasificacion actual de acceso:
+
+| Clase | Endpoints | Estado |
+|---|---|---|
+| Adult-only | `GET /usage`, `GET /usage/{day}`, todos los `/analysis`, generar `/device-link-codes`, `/auth/adult/me`, `/adult/profiles` | Bearer adulto + link activo cuando hay `profile_id` |
+| Device-only | `POST /usage` | Abierto temporalmente; **DEVICE AUTH REQUIRED** |
+| Shared | Profile GET/PUT, Settings, ActivityPreferences y Context CRUD | Abiertos para no romper Android; requieren principal Adult o Device en una etapa futura |
+| Bootstrap | `POST /profiles`, registrar Device y `POST /device-links/claim` | Abiertos por el flujo actual; ownership/bootstrap definitivo pendiente |
+
+No se usa la ausencia de token como identidad infantil. Los endpoints compartidos siguen abiertos de forma explicita hasta implementar credenciales Device. Un adulto autenticado sin link recibe `403` tanto para un Profile ajeno como para un UUID inexistente. `AdultProfileLink` se crea mediante el claim autenticado descripto a continuacion; ningun endpoint acepta `adult_id` o `profile_id` enviados por el adulto para crear esa relacion.
+
+## Vinculacion AdultAccount - Profile
+
+El dispositivo infantil puede generar un codigo temporal para vincular el Profile con una cuenta adulta:
+
+```text
+POST /api/v1/profiles/{profile_id}/adult-link-codes
+-> codigo ADULT_PROFILE_LINK de seis digitos
+```
+
+Este endpoint es un bootstrap provisional sin autenticacion porque todavia no existe una credencial Device verificable. Conocer o enviar un `device_id` o `installation_id` no prueba control del dispositivo. **DEVICE AUTH REQUIRED BEFORE PRODUCTION.**
+
+Despues de validar su email mediante OTP, el adulto reclama el codigo con su JWT:
+
+```http
+POST /api/v1/adult/profile-links/claim
+Authorization: Bearer <adult JWT>
+Content-Type: application/json
+
+{
+  "code": "728341"
+}
+```
+
+El DTO admite solamente `code`: `adult_id` se obtiene del JWT validado y `profile_id` se resuelve desde el codigo almacenado. El codigo dura 10 minutos, se guarda como HMAC-SHA256, tiene un solo uso y no puede utilizarse para el purpose `DEVICE_LINK`. El claim bloquea la fila del codigo y confirma en una unica transaccion tanto el `AdultProfileLink` como `used_at`.
+
+Si el vinculo activo ya existe, el claim es idempotente, consume el nuevo codigo y devuelve el mismo vinculo. Si el vinculo fue revocado, responde `409` y no consume el codigo; la reautorizacion se definira junto con consentimiento y verificacion de representante. Un claim exitoso aparece inmediatamente en `GET /api/v1/adult/profiles` y habilita los endpoints adult-only con el mismo JWT, porque la autorizacion consulta la base de datos en cada request.
+
+Este flujo demuestra control del email y posesion del codigo temporal, y crea una relacion tecnica `AdultProfileLink`. **Representative verification is not implemented in this stage.** No demuestra parentesco, tutela ni representacion legal.
+
+Esta etapa implementa autenticacion y autorizacion adulta basica, no cumplimiento legal integral. Siguen pendientes consentimiento y su revocacion, verificacion de representante, bloqueo de ingestion, Device authentication, acceso/rectificacion/supresion, retencion, auditoria completa, rate limiting y hardening productivo.
 
 ## Estado del análisis
 

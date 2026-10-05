@@ -2,6 +2,9 @@ from app.db.models.entities import (
     ActivityInterest,
     ActivityToAvoid,
     AdaptationType,
+    AdultAccount,
+    AdultOtpChallenge,
+    AdultProfileLink,
     Alert,
     AnalysisResult,
     AppUsage,
@@ -20,6 +23,9 @@ from app.db.models.entities import (
 
 __all__ = [
     "Profile",
+    "AdultAccount",
+    "AdultProfileLink",
+    "AdultOtpChallenge",
     "ProfileSettings",
     "ProfileContext",
     "ProfileContextType",

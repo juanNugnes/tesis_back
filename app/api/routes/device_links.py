@@ -3,12 +3,17 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_profile
+from app.api.dependencies import get_profile, require_profile_access
 from app.core.config import get_settings
 from app.db.models import Profile
 from app.db.session import get_db
 from app.schemas.device import DeviceCreate, DeviceRead
-from app.schemas.profile_link import DeviceLinkClaimRequest, DeviceLinkClaimResponse, DeviceLinkCodeRead
+from app.schemas.profile_link import (
+    AdultProfileLinkCodeRead,
+    DeviceLinkClaimRequest,
+    DeviceLinkClaimResponse,
+    DeviceLinkCodeRead,
+)
 from app.services.device_service import (
     DeviceAlreadyLinkedToAnotherProfileError,
     DeviceService,
@@ -63,17 +68,38 @@ async def register_device(
     "/profiles/{profile_id}/device-link-codes",
     response_model=DeviceLinkCodeRead,
     status_code=status.HTTP_201_CREATED,
-    description=(
-        "Provisional MVP endpoint without ownership authentication. Knowing profile_id is currently "
-        "sufficient; AdultAccount/JWT protection is required before production."
-    ),
+    description="Requires an adult Bearer token with an active link to the requested Profile.",
 )
 async def create_device_link_code(
-    profile: Profile = Depends(get_profile),
+    profile: Profile = Depends(require_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
     try:
         return await link_service(db).generate(profile)
+    except InactiveProfileError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Profile is inactive")
+    except LinkCodeGenerationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to generate link code",
+        )
+
+
+@router.post(
+    "/profiles/{profile_id}/adult-link-codes",
+    response_model=AdultProfileLinkCodeRead,
+    status_code=status.HTTP_201_CREATED,
+    description=(
+        "Bootstrap provisional from the child side. DEVICE AUTH REQUIRED BEFORE PRODUCTION; "
+        "no verifiable Device credential exists in this stage."
+    ),
+)
+async def create_adult_profile_link_code(
+    profile: Profile = Depends(get_profile),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await link_service(db).generate_adult_profile_link_code(profile)
     except InactiveProfileError:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Profile is inactive")
     except LinkCodeGenerationError:

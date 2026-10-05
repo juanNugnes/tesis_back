@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import alerts, analysis, device_links, profile_activity_preferences, profile_contexts, profile_settings, profiles, usage
+from app.api.routes import adult_auth, adult_profile_links, adult_profiles, alerts, analysis, device_links, profile_activity_preferences, profile_contexts, profile_settings, profiles, usage
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -11,6 +11,9 @@ app = FastAPI(
 )
 for router in (
     profiles.router,
+    adult_auth.router,
+    adult_profile_links.router,
+    adult_profiles.router,
     device_links.router,
     profile_settings.router,
     profile_activity_preferences.router,

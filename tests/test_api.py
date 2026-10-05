@@ -617,12 +617,13 @@ async def test_cannot_update_or_delete_context_from_another_profile(client):
 
 
 @pytest.mark.asyncio
-async def test_register_usage_and_get_history(client):
+async def test_register_usage_and_get_history(client, adult_session):
     profile = await create_profile(client)
     response = await client.post(f"/api/v1/profiles/{profile['id']}/usage", json=usage_payload())
     assert response.status_code == 201
     assert response.json()["applications"][0]["usage_minutes"] == 80
-    history = await client.get(f"/api/v1/profiles/{profile['id']}/usage")
+    headers, _ = await adult_session(profile["id"])
+    history = await client.get(f"/api/v1/profiles/{profile['id']}/usage", headers=headers)
     assert history.status_code == 200
     assert len(history.json()) == 1
 
@@ -636,10 +637,15 @@ async def test_reject_duplicate_usage(client):
 
 
 @pytest.mark.asyncio
-async def test_analysis_uses_mock(client):
+async def test_analysis_uses_mock(client, adult_session):
     profile = await create_profile(client)
     await client.post(f"/api/v1/profiles/{profile['id']}/usage", json=usage_payload())
-    response = await client.post(f"/api/v1/profiles/{profile['id']}/analysis", json={"date": "2026-08-15"})
+    headers, _ = await adult_session(profile["id"])
+    response = await client.post(
+        f"/api/v1/profiles/{profile['id']}/analysis",
+        json={"date": "2026-08-15"},
+        headers=headers,
+    )
     assert response.status_code == 201
     result = response.json()
     assert result["anomaly_detected"] is False

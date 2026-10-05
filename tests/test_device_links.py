@@ -19,8 +19,12 @@ async def create_profile(client, *, alias="Perfil Device", active=True):
     return response.json()
 
 
-async def create_link_code(client, profile_id):
-    response = await client.post(f"/api/v1/profiles/{profile_id}/device-link-codes")
+async def create_link_code(client, adult_session, profile_id):
+    headers, _ = await adult_session(profile_id)
+    response = await client.post(
+        f"/api/v1/profiles/{profile_id}/device-link-codes",
+        headers=headers,
+    )
     assert response.status_code == 201
     return response.json()
 
@@ -87,11 +91,15 @@ async def test_device_registration_validates_profile_and_platform(client):
 
 
 @pytest.mark.asyncio
-async def test_generate_link_code_hashes_it_and_sets_expiration(client, db_session):
+async def test_generate_link_code_hashes_it_and_sets_expiration(client, db_session, adult_session):
     profile = await create_profile(client)
     before = datetime.now(timezone.utc)
 
-    response = await client.post(f"/api/v1/profiles/{profile['id']}/device-link-codes")
+    headers, _ = await adult_session(profile["id"])
+    response = await client.post(
+        f"/api/v1/profiles/{profile['id']}/device-link-codes",
+        headers=headers,
+    )
 
     assert response.status_code == 201
     body = response.json()
@@ -111,10 +119,10 @@ async def test_generate_link_code_hashes_it_and_sets_expiration(client, db_sessi
 
 
 @pytest.mark.asyncio
-async def test_two_active_link_codes_can_coexist(client, db_session):
+async def test_two_active_link_codes_can_coexist(client, db_session, adult_session):
     profile = await create_profile(client)
-    first = await create_link_code(client, profile["id"])
-    second = await create_link_code(client, profile["id"])
+    first = await create_link_code(client, adult_session, profile["id"])
+    second = await create_link_code(client, adult_session, profile["id"])
 
     assert first["code"] != second["code"]
     count = await db_session.scalar(
@@ -145,19 +153,28 @@ async def test_link_code_generation_retries_a_collision(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_link_code_generation_validates_profile_state(client):
-    missing = await client.post(f"/api/v1/profiles/{uuid.uuid4()}/device-link-codes")
-    assert missing.status_code == 404
+async def test_link_code_generation_validates_profile_state(client, adult_session):
+    own_profile = await create_profile(client, alias="Own")
+    headers, _ = await adult_session(own_profile["id"])
+    missing = await client.post(
+        f"/api/v1/profiles/{uuid.uuid4()}/device-link-codes",
+        headers=headers,
+    )
+    assert missing.status_code == 403
 
     inactive = await create_profile(client, active=False)
-    response = await client.post(f"/api/v1/profiles/{inactive['id']}/device-link-codes")
+    inactive_headers, _ = await adult_session(inactive["id"])
+    response = await client.post(
+        f"/api/v1/profiles/{inactive['id']}/device-link-codes",
+        headers=inactive_headers,
+    )
     assert response.status_code == 409
 
 
 @pytest.mark.asyncio
-async def test_claim_links_device_returns_profile_and_consumes_code(client, db_session):
+async def test_claim_links_device_returns_profile_and_consumes_code(client, db_session, adult_session):
     profile = await create_profile(client)
-    link_code = await create_link_code(client, profile["id"])
+    link_code = await create_link_code(client, adult_session, profile["id"])
     payload = {
         "code": link_code["code"],
         "installation_id": "claimed-installation",
@@ -185,9 +202,9 @@ async def test_claim_links_device_returns_profile_and_consumes_code(client, db_s
 
 
 @pytest.mark.asyncio
-async def test_expired_and_unknown_codes_do_not_create_devices(client, db_session):
+async def test_expired_and_unknown_codes_do_not_create_devices(client, db_session, adult_session):
     profile = await create_profile(client)
-    link_code = await create_link_code(client, profile["id"])
+    link_code = await create_link_code(client, adult_session, profile["id"])
     stored = await db_session.scalar(
         select(ProfileLinkCode).where(ProfileLinkCode.profile_id == uuid.UUID(profile["id"]))
     )
@@ -220,11 +237,11 @@ async def test_expired_and_unknown_codes_do_not_create_devices(client, db_sessio
 
 
 @pytest.mark.asyncio
-async def test_claim_is_idempotent_for_existing_profile_device(client, db_session):
+async def test_claim_is_idempotent_for_existing_profile_device(client, db_session, adult_session):
     profile = await create_profile(client)
     device_payload = {"installation_id": "already-linked", "platform": "ANDROID"}
     original = await client.post(f"/api/v1/profiles/{profile['id']}/devices", json=device_payload)
-    link_code = await create_link_code(client, profile["id"])
+    link_code = await create_link_code(client, adult_session, profile["id"])
 
     claimed = await client.post(
         "/api/v1/device-links/claim",
@@ -237,14 +254,14 @@ async def test_claim_is_idempotent_for_existing_profile_device(client, db_sessio
 
 
 @pytest.mark.asyncio
-async def test_claim_conflict_does_not_consume_code(client, db_session):
+async def test_claim_conflict_does_not_consume_code(client, db_session, adult_session):
     code_profile = await create_profile(client, alias="Codigo")
     other_profile = await create_profile(client, alias="Otro")
     installation = {"installation_id": "owned-elsewhere", "platform": "ANDROID"}
     assert (
         await client.post(f"/api/v1/profiles/{other_profile['id']}/devices", json=installation)
     ).status_code == 201
-    link_code = await create_link_code(client, code_profile["id"])
+    link_code = await create_link_code(client, adult_session, code_profile["id"])
 
     response = await client.post(
         "/api/v1/device-links/claim",
@@ -260,9 +277,9 @@ async def test_claim_conflict_does_not_consume_code(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_claim_rejects_profile_deactivated_after_code_creation(client, db_session):
+async def test_claim_rejects_profile_deactivated_after_code_creation(client, db_session, adult_session):
     profile = await create_profile(client)
-    link_code = await create_link_code(client, profile["id"])
+    link_code = await create_link_code(client, adult_session, profile["id"])
     updated = await client.put(f"/api/v1/profiles/{profile['id']}", json={"active": False})
     assert updated.status_code == 200
 

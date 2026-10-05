@@ -98,6 +98,7 @@ class Profile(Base):
     )
     devices: Mapped[list["Device"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
     link_codes: Mapped[list["ProfileLinkCode"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
+    adult_links: Mapped[list["AdultProfileLink"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
 
 
 class ProfileSettings(Base):
@@ -140,6 +141,52 @@ class ProfileActivityPreferences(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     profile: Mapped[Profile] = relationship(back_populates="activity_preferences")
+
+
+class AdultAccount(Base):
+    __tablename__ = "adult_accounts"
+    __table_args__ = (UniqueConstraint("email", name="uq_adult_accounts_email"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(320))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    profile_links: Mapped[list["AdultProfileLink"]] = relationship(
+        back_populates="adult",
+        cascade="all, delete-orphan",
+    )
+    otp_challenges: Mapped[list["AdultOtpChallenge"]] = relationship(
+        back_populates="adult",
+        cascade="all, delete-orphan",
+    )
+
+
+class AdultProfileLink(Base):
+    __tablename__ = "adult_profile_links"
+    __table_args__ = (
+        UniqueConstraint("adult_id", "profile_id", name="uq_adult_profile_links_adult_profile"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    adult_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("adult_accounts.id", ondelete="CASCADE"), index=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    adult: Mapped[AdultAccount] = relationship(back_populates="profile_links")
+    profile: Mapped[Profile] = relationship(back_populates="adult_links")
+
+
+class AdultOtpChallenge(Base):
+    __tablename__ = "adult_otp_challenges"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    adult_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("adult_accounts.id", ondelete="CASCADE"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    adult: Mapped[AdultAccount] = relationship(back_populates="otp_challenges")
 
 
 class Device(Base):
