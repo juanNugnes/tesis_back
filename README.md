@@ -50,6 +50,9 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `POST /api/v1/profiles`
 - `GET /api/v1/profiles/{profile_id}`
 - `PUT /api/v1/profiles/{profile_id}`
+- `POST /api/v1/profiles/{profile_id}/devices`
+- `POST /api/v1/profiles/{profile_id}/device-link-codes`
+- `POST /api/v1/device-links/claim`
 - `GET /api/v1/profiles/{profile_id}/settings`
 - `PUT /api/v1/profiles/{profile_id}/settings`
 - `GET /api/v1/profiles/{profile_id}/activity-preferences`
@@ -149,6 +152,29 @@ Ejemplo sin restricciones:
 ```
 
 Las colecciones no aceptan duplicados. `additional_notes` admite hasta 500 caracteres. Al cambiar `adaptation_type` a `NONE`, el backend limpia `valid_until` y conserva las demas preferencias declaradas.
+
+## Identidad de dispositivo y vinculacion temporal (MVP)
+
+Para un perfil nuevo, Android conserva su identificador de instalacion y registra el dispositivo en dos pasos:
+
+```text
+POST /api/v1/profiles
+-> profile_id
+POST /api/v1/profiles/{profile_id}/devices
+```
+
+Si una instalacion pierde el `profile_id`, el flujo provisional de recuperacion es:
+
+```text
+POST /api/v1/profiles/{profile_id}/device-link-codes
+-> codigo temporal
+POST /api/v1/device-links/claim
+-> Device + ProfileDetailRead
+```
+
+El codigo `DEVICE_LINK` tiene seis digitos, dura 10 minutos, se almacena como HMAC-SHA256 y se consume una sola vez. No es una identidad permanente ni reemplaza autenticacion adulta. Actualmente no hay ownership, AdultAccount ni JWT: conocer el `profile_id` alcanza para generar un codigo. Antes de produccion se requieren autenticacion, autorizacion, rate limiting y un secreto `DEVICE_LINK_CODE_HASH_SECRET` administrado de forma segura.
+
+`last_seen_at` se inicializa al registrar o vincular el Device, pero esta version no lo actualiza automaticamente en cada request. La concurrencia del claim se protege con locking y consumo condicional en PostgreSQL; falta una prueba de integracion concurrente contra PostgreSQL porque la suite usa SQLite.
 
 ## Estado del análisis
 

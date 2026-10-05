@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime, time, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -96,6 +96,8 @@ class Profile(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    devices: Mapped[list["Device"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
+    link_codes: Mapped[list["ProfileLinkCode"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
 
 
 class ProfileSettings(Base):
@@ -138,6 +140,34 @@ class ProfileActivityPreferences(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     profile: Mapped[Profile] = relationship(back_populates="activity_preferences")
+
+
+class Device(Base):
+    __tablename__ = "devices"
+    __table_args__ = (UniqueConstraint("installation_id", name="uq_devices_installation_id"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    installation_id: Mapped[str] = mapped_column(String(255))
+    platform: Mapped[str] = mapped_column(String(20))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    profile: Mapped[Profile] = relationship(back_populates="devices")
+
+
+class ProfileLinkCode(Base):
+    __tablename__ = "profile_link_codes"
+    __table_args__ = (UniqueConstraint("code_hash", name="uq_profile_link_codes_code_hash"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    purpose: Mapped[str] = mapped_column(String(32))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    profile: Mapped[Profile] = relationship(back_populates="link_codes")
 
 
 class DailyUsage(Base):

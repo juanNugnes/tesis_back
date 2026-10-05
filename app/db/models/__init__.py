@@ -7,12 +7,14 @@ from app.db.models.entities import (
     AppUsage,
     Avatar,
     DailyUsage,
+    Device,
     FunctionalConsideration,
     Profile,
     ProfileActivityPreferences,
     ProfileContext,
     ProfileContextType,
     ProfileSettings,
+    ProfileLinkCode,
     RiskLevel,
 )
 
@@ -28,8 +30,10 @@ __all__ = [
     "FunctionalConsideration",
     "Avatar",
     "DailyUsage",
+    "Device",
     "AppUsage",
     "AnalysisResult",
     "Alert",
     "RiskLevel",
+    "ProfileLinkCode",
 ]
