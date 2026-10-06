@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     adult_otp_ttl_minutes: int = Field(default=10, gt=0)
     adult_otp_max_attempts: int = Field(default=5, gt=0)
     expose_dev_otp: bool = False
+    device_auth_jwt_secret: SecretStr | None = None
+    device_auth_jwt_exp_minutes: int = Field(default=43_200, gt=0)
+    device_bootstrap_ttl_minutes: int = Field(default=10, gt=0)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

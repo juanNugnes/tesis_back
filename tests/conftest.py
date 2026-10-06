@@ -2,6 +2,7 @@ import os
 import uuid
 
 os.environ["ADULT_AUTH_JWT_SECRET"] = "test-only-adult-auth-secret-at-least-32-characters"
+os.environ["DEVICE_AUTH_JWT_SECRET"] = "test-only-device-auth-secret-at-least-32-characters"
 os.environ["ENVIRONMENT"] = "development"
 os.environ["EXPOSE_DEV_OTP"] = "true"
 

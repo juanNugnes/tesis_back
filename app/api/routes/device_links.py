@@ -1,13 +1,20 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_profile, require_profile_access
+from app.api.dependencies import (
+    device_bootstrap_bearer,
+    get_device_auth_service,
+    get_device_bootstrap_service,
+    require_device_profile_access,
+    require_profile_access,
+)
 from app.core.config import get_settings
 from app.db.models import Profile
 from app.db.session import get_db
-from app.schemas.device import DeviceCreate, DeviceRead
+from app.schemas.device import DeviceCreate, DeviceRead, DeviceRegistrationRead
 from app.schemas.profile_link import (
     AdultProfileLinkCodeRead,
     DeviceLinkClaimRequest,
@@ -16,8 +23,13 @@ from app.schemas.profile_link import (
 )
 from app.services.device_service import (
     DeviceAlreadyLinkedToAnotherProfileError,
-    DeviceService,
     InactiveProfileError,
+)
+from app.services.device_auth_service import DeviceAuthService
+from app.services.device_bootstrap_service import (
+    BootstrapProfileMismatchError,
+    DeviceBootstrapService,
+    InvalidBootstrapTokenError,
 )
 from app.services.profile_link_service import (
     InvalidLinkCodeError,
@@ -40,17 +52,35 @@ def link_service(db: AsyncSession) -> ProfileLinkService:
 
 @router.post(
     "/profiles/{profile_id}/devices",
-    response_model=DeviceRead,
+    response_model=DeviceRegistrationRead,
     status_code=status.HTTP_201_CREATED,
+    description="Registers the first Device using a one-time DeviceBootstrapBearer credential.",
 )
 async def register_device(
+    profile_id: uuid.UUID,
     data: DeviceCreate,
-    response: Response,
-    profile: Profile = Depends(get_profile),
-    db: AsyncSession = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(device_bootstrap_bearer),
+    service: DeviceBootstrapService = Depends(get_device_bootstrap_service),
 ):
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
-        registration = await DeviceService(db).register(profile, data)
+        result = await service.register_device(profile_id, credentials.credentials, data)
+    except InvalidBootstrapTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired bootstrap token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except BootstrapProfileMismatchError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bootstrap token does not authorize this profile",
+        )
     except DeviceAlreadyLinkedToAnotherProfileError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -59,9 +89,11 @@ async def register_device(
     except InactiveProfileError:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Profile is inactive")
 
-    if not registration.created:
-        response.status_code = status.HTTP_200_OK
-    return registration.device
+    return DeviceRegistrationRead(
+        **DeviceRead.model_validate(result.device).model_dump(),
+        access_token=result.token.access_token,
+        expires_in=result.token.expires_in,
+    )
 
 
 @router.post(
@@ -90,12 +122,11 @@ async def create_device_link_code(
     response_model=AdultProfileLinkCodeRead,
     status_code=status.HTTP_201_CREATED,
     description=(
-        "Bootstrap provisional from the child side. DEVICE AUTH REQUIRED BEFORE PRODUCTION; "
-        "no verifiable Device credential exists in this stage."
+        "Requires a Device Bearer token whose persisted Device belongs to the requested Profile."
     ),
 )
 async def create_adult_profile_link_code(
-    profile: Profile = Depends(get_profile),
+    profile: Profile = Depends(require_device_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -117,6 +148,7 @@ async def create_adult_profile_link_code(
 async def claim_device_link(
     data: DeviceLinkClaimRequest,
     db: AsyncSession = Depends(get_db),
+    device_auth: DeviceAuthService = Depends(get_device_auth_service),
 ):
     try:
         device, profile = await link_service(db).claim(data)
@@ -131,7 +163,10 @@ async def claim_device_link(
             detail="Installation is already linked to another profile",
         )
 
+    token = device_auth.issue(device)
     return DeviceLinkClaimResponse(
         device=DeviceRead.model_validate(device),
         profile=ProfileService.detail(profile),
+        access_token=token.access_token,
+        expires_in=token.expires_in,
     )

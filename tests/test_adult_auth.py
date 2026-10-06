@@ -274,7 +274,7 @@ async def test_device_link_code_requires_access_but_claim_stays_public(client, a
 
 
 @pytest.mark.asyncio
-async def test_protected_adult_routes_require_bearer_but_usage_post_remains_open(client):
+async def test_protected_routes_require_their_expected_bearer(client):
     profile = await create_profile(client, "Device ingestion")
 
     assert (await client.get(f"/api/v1/profiles/{profile['id']}/usage")).status_code == 401
@@ -290,4 +290,4 @@ async def test_protected_adult_routes_require_bearer_but_usage_post_remains_open
             "night_usage_minutes": 0,
         },
     )
-    assert usage.status_code == 201
+    assert usage.status_code == 401

@@ -19,3 +19,9 @@ class DeviceRead(DeviceCreate):
     created_at: datetime
     updated_at: datetime
     last_seen_at: datetime | None
+
+
+class DeviceRegistrationRead(DeviceRead):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int

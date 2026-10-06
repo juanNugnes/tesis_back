@@ -35,3 +35,8 @@ class ProfileRead(BaseModel):
 
 class ProfileDetailRead(ProfileRead):
     settings: ProfileSettingsRead
+
+
+class ProfileBootstrapRead(ProfileDetailRead):
+    bootstrap_token: str
+    bootstrap_expires_at: datetime

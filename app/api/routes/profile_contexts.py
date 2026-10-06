@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_profile
+from app.api.dependencies import require_profile_access
 from app.db.models import Profile
 from app.db.session import get_db
 from app.repositories.profile_context_repository import ProfileContextRepository
@@ -25,7 +25,7 @@ def get_service(db: AsyncSession) -> ProfileContextService:
 @router.post("", response_model=ProfileContextRead, status_code=status.HTTP_201_CREATED)
 async def create_profile_context(
     data: ProfileContextCreate,
-    profile: Profile = Depends(get_profile),
+    profile: Profile = Depends(require_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -39,7 +39,7 @@ async def create_profile_context(
 
 @router.get("", response_model=list[ProfileContextRead])
 async def list_profile_contexts(
-    profile: Profile = Depends(get_profile),
+    profile: Profile = Depends(require_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
     return await get_service(db).list(profile.id)
@@ -47,7 +47,7 @@ async def list_profile_contexts(
 
 @router.get("/active", response_model=list[ProfileContextRead])
 async def list_active_profile_contexts(
-    profile: Profile = Depends(get_profile),
+    profile: Profile = Depends(require_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
     return await get_service(db).list_active(profile.id)
@@ -57,7 +57,7 @@ async def list_active_profile_contexts(
 async def update_profile_context(
     context_id: uuid.UUID,
     data: ProfileContextUpdate,
-    profile: Profile = Depends(get_profile),
+    profile: Profile = Depends(require_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -76,7 +76,7 @@ async def update_profile_context(
 @router.delete("/{context_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_profile_context(
     context_id: uuid.UUID,
-    profile: Profile = Depends(get_profile),
+    profile: Profile = Depends(require_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
     try:

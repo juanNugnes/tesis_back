@@ -34,20 +34,22 @@ async def device_count(db_session):
 
 
 @pytest.mark.asyncio
-async def test_register_device_and_repeat_idempotently(client, db_session):
+async def test_register_device_consumes_bootstrap(client, db_session):
     profile = await create_profile(client)
     url = f"/api/v1/profiles/{profile['id']}/devices"
     payload = {"installation_id": "installation-one", "platform": "ANDROID"}
 
-    first = await client.post(url, json=payload)
-    second = await client.post(url, json=payload)
+    headers = {"Authorization": f"Bearer {profile['bootstrap_token']}"}
+    first = await client.post(url, headers=headers, json=payload)
+    second = await client.post(url, headers=headers, json=payload)
 
     assert first.status_code == 201
-    assert second.status_code == 200
-    assert second.json()["id"] == first.json()["id"]
+    assert second.status_code == 401
     assert first.json()["profile_id"] == profile["id"]
     assert first.json()["active"] is True
     assert first.json()["last_seen_at"] is not None
+    assert first.json()["token_type"] == "bearer"
+    assert first.json()["access_token"]
     assert await device_count(db_session) == 1
 
 
@@ -57,10 +59,18 @@ async def test_installation_cannot_move_to_another_profile(client):
     second_profile = await create_profile(client, alias="Segundo")
     payload = {"installation_id": "shared-installation", "platform": "ANDROID"}
     assert (
-        await client.post(f"/api/v1/profiles/{first_profile['id']}/devices", json=payload)
+        await client.post(
+            f"/api/v1/profiles/{first_profile['id']}/devices",
+            headers={"Authorization": f"Bearer {first_profile['bootstrap_token']}"},
+            json=payload,
+        )
     ).status_code == 201
 
-    response = await client.post(f"/api/v1/profiles/{second_profile['id']}/devices", json=payload)
+    response = await client.post(
+        f"/api/v1/profiles/{second_profile['id']}/devices",
+        headers={"Authorization": f"Bearer {second_profile['bootstrap_token']}"},
+        json=payload,
+    )
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Installation is already linked to another profile"
@@ -68,16 +78,19 @@ async def test_installation_cannot_move_to_another_profile(client):
 
 @pytest.mark.asyncio
 async def test_device_registration_validates_profile_and_platform(client):
+    token_profile = await create_profile(client, alias="Token source")
     missing_id = uuid.uuid4()
     missing = await client.post(
         f"/api/v1/profiles/{missing_id}/devices",
+        headers={"Authorization": f"Bearer {token_profile['bootstrap_token']}"},
         json={"installation_id": "missing-profile", "platform": "ANDROID"},
     )
-    assert missing.status_code == 404
+    assert missing.status_code == 403
 
     inactive = await create_profile(client, active=False)
     rejected = await client.post(
         f"/api/v1/profiles/{inactive['id']}/devices",
+        headers={"Authorization": f"Bearer {inactive['bootstrap_token']}"},
         json={"installation_id": "inactive-profile", "platform": "ANDROID"},
     )
     assert rejected.status_code == 409
@@ -85,6 +98,7 @@ async def test_device_registration_validates_profile_and_platform(client):
     active = await create_profile(client, alias="Platform")
     invalid_platform = await client.post(
         f"/api/v1/profiles/{active['id']}/devices",
+        headers={"Authorization": f"Bearer {active['bootstrap_token']}"},
         json={"installation_id": "ios-installation", "platform": "IOS"},
     )
     assert invalid_platform.status_code == 422
@@ -189,6 +203,8 @@ async def test_claim_links_device_returns_profile_and_consumes_code(client, db_s
     assert body["device"]["installation_id"] == "claimed-installation"
     assert body["profile"]["id"] == profile["id"]
     assert body["profile"]["settings"]["profile_id"] == profile["id"]
+    assert body["access_token"]
+    assert body["token_type"] == "bearer"
 
     stored = await db_session.scalar(
         select(ProfileLinkCode).where(ProfileLinkCode.profile_id == uuid.UUID(profile["id"]))
@@ -240,7 +256,11 @@ async def test_expired_and_unknown_codes_do_not_create_devices(client, db_sessio
 async def test_claim_is_idempotent_for_existing_profile_device(client, db_session, adult_session):
     profile = await create_profile(client)
     device_payload = {"installation_id": "already-linked", "platform": "ANDROID"}
-    original = await client.post(f"/api/v1/profiles/{profile['id']}/devices", json=device_payload)
+    original = await client.post(
+        f"/api/v1/profiles/{profile['id']}/devices",
+        headers={"Authorization": f"Bearer {profile['bootstrap_token']}"},
+        json=device_payload,
+    )
     link_code = await create_link_code(client, adult_session, profile["id"])
 
     claimed = await client.post(
@@ -259,7 +279,11 @@ async def test_claim_conflict_does_not_consume_code(client, db_session, adult_se
     other_profile = await create_profile(client, alias="Otro")
     installation = {"installation_id": "owned-elsewhere", "platform": "ANDROID"}
     assert (
-        await client.post(f"/api/v1/profiles/{other_profile['id']}/devices", json=installation)
+        await client.post(
+            f"/api/v1/profiles/{other_profile['id']}/devices",
+            headers={"Authorization": f"Bearer {other_profile['bootstrap_token']}"},
+            json=installation,
+        )
     ).status_code == 201
     link_code = await create_link_code(client, adult_session, code_profile["id"])
 
@@ -279,8 +303,17 @@ async def test_claim_conflict_does_not_consume_code(client, db_session, adult_se
 @pytest.mark.asyncio
 async def test_claim_rejects_profile_deactivated_after_code_creation(client, db_session, adult_session):
     profile = await create_profile(client)
-    link_code = await create_link_code(client, adult_session, profile["id"])
-    updated = await client.put(f"/api/v1/profiles/{profile['id']}", json={"active": False})
+    headers, _ = await adult_session(profile["id"])
+    generated = await client.post(
+        f"/api/v1/profiles/{profile['id']}/device-link-codes",
+        headers=headers,
+    )
+    link_code = generated.json()
+    updated = await client.put(
+        f"/api/v1/profiles/{profile['id']}",
+        headers=headers,
+        json={"active": False},
+    )
     assert updated.status_code == 200
 
     response = await client.post(

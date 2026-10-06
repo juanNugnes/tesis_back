@@ -6,8 +6,8 @@ from app.schemas.adult_auth import (
     AdultOtpVerifyRequest,
     AdultRead,
 )
-from app.schemas.device import DeviceCreate, DeviceRead
-from app.schemas.profile import ProfileCreate, ProfileRead, ProfileUpdate
+from app.schemas.device import DeviceCreate, DeviceRead, DeviceRegistrationRead
+from app.schemas.profile import ProfileBootstrapRead, ProfileCreate, ProfileRead, ProfileUpdate
 from app.schemas.profile_link import (
     AdultProfileLinkClaimRequest,
     AdultProfileLinkClaimResponse,
@@ -23,8 +23,10 @@ __all__ = [
     "ProfileCreate",
     "ProfileRead",
     "ProfileUpdate",
+    "ProfileBootstrapRead",
     "DeviceCreate",
     "DeviceRead",
+    "DeviceRegistrationRead",
     "DeviceLinkCodeRead",
     "DeviceLinkClaimRequest",
     "DeviceLinkClaimResponse",

@@ -9,6 +9,7 @@ from typing import Any
 
 JWT_ALGORITHM = "HS256"
 ADULT_ACCESS_TOKEN_TYPE = "adult_access"
+DEVICE_ACCESS_TOKEN_TYPE = "device_access"
 
 
 class InvalidAccessTokenError(Exception):
@@ -24,14 +25,15 @@ def _base64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + padding)
 
 
-class AdultAccessTokenCodec:
-    def __init__(self, secret: str, expiration_minutes: int):
+class AccessTokenCodec:
+    def __init__(self, secret: str, expiration_minutes: int, token_type: str):
         self.secret = secret.encode("utf-8")
         self.expiration = timedelta(minutes=expiration_minutes)
+        self.token_type = token_type
 
     def issue(
         self,
-        adult_id: uuid.UUID,
+        subject_id: uuid.UUID,
         *,
         now: datetime | None = None,
         expiration: timedelta | None = None,
@@ -40,8 +42,8 @@ class AdultAccessTokenCodec:
         expires_at = issued_at + (expiration if expiration is not None else self.expiration)
         header = {"alg": JWT_ALGORITHM, "typ": "JWT"}
         payload = {
-            "sub": str(adult_id),
-            "type": ADULT_ACCESS_TOKEN_TYPE,
+            "sub": str(subject_id),
+            "type": self.token_type,
             "iat": int(issued_at.timestamp()),
             "exp": int(expires_at.timestamp()),
         }
@@ -74,11 +76,10 @@ class AdultAccessTokenCodec:
     def _encode_json(value: dict[str, Any]) -> str:
         return _base64url_encode(json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8"))
 
-    @staticmethod
-    def _validate_claims(header: Any, payload: Any, now: datetime) -> None:
+    def _validate_claims(self, header: Any, payload: Any, now: datetime) -> None:
         if not isinstance(header, dict) or header.get("alg") != JWT_ALGORITHM or header.get("typ") != "JWT":
             raise InvalidAccessTokenError
-        if not isinstance(payload, dict) or payload.get("type") != ADULT_ACCESS_TOKEN_TYPE:
+        if not isinstance(payload, dict) or payload.get("type") != self.token_type:
             raise InvalidAccessTokenError
         if not isinstance(payload.get("sub"), str):
             raise InvalidAccessTokenError
@@ -93,4 +94,26 @@ class AdultAccessTokenCodec:
             or iat > int(now.timestamp()) + 60
         ):
             raise InvalidAccessTokenError
+
+
+class AdultAccessTokenCodec(AccessTokenCodec):
+    def __init__(self, secret: str, expiration_minutes: int):
+        super().__init__(secret, expiration_minutes, ADULT_ACCESS_TOKEN_TYPE)
+
+
+class DeviceAccessTokenCodec(AccessTokenCodec):
+    def __init__(self, secret: str, expiration_minutes: int):
+        super().__init__(secret, expiration_minutes, DEVICE_ACCESS_TOKEN_TYPE)
+
+
+def peek_access_token_type(token: str) -> str | None:
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        payload = json.loads(_base64url_decode(parts[1]))
+        token_type = payload.get("type") if isinstance(payload, dict) else None
+        return token_type if isinstance(token_type, str) else None
+    except (ValueError, TypeError, UnicodeDecodeError, binascii.Error, json.JSONDecodeError):
+        return None
 

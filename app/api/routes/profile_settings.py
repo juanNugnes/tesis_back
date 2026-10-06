@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_profile
+from app.api.dependencies import require_profile_principal_access
 from app.db.models import Profile
 from app.db.session import get_db
 from app.repositories.profile_settings_repository import ProfileSettingsRepository
@@ -12,10 +12,10 @@ router = APIRouter(prefix="/profiles/{profile_id}/settings", tags=["profile sett
 
 
 @router.get("", response_model=ProfileSettingsRead)
-async def read_profile_settings(profile: Profile = Depends(get_profile), db: AsyncSession = Depends(get_db)):
+async def read_profile_settings(profile: Profile = Depends(require_profile_principal_access), db: AsyncSession = Depends(get_db)):
     return await ProfileSettingsService(ProfileSettingsRepository(db)).get(profile.id)
 
 
 @router.put("", response_model=ProfileSettingsRead)
-async def update_profile_settings(data: ProfileSettingsUpdate, profile: Profile = Depends(get_profile), db: AsyncSession = Depends(get_db)):
+async def update_profile_settings(data: ProfileSettingsUpdate, profile: Profile = Depends(require_profile_principal_access), db: AsyncSession = Depends(get_db)):
     return await ProfileSettingsService(ProfileSettingsRepository(db)).upsert(profile.id, data)

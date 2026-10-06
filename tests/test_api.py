@@ -1,12 +1,44 @@
 from datetime import datetime, timedelta, timezone
+import uuid
 
 import pytest
 
 
-async def create_profile(client):
-    response = await client.post("/api/v1/profiles", json={"alias": "Perfil A", "age": 9, "avatar": "fox"})
+async def create_profile(client, payload=None):
+    response = await client.post(
+        "/api/v1/profiles",
+        json=payload or {"alias": "Perfil A", "age": 9, "avatar": "fox"},
+    )
     assert response.status_code == 201
-    return response.json()
+    profile = response.json()
+    registered = await client.post(
+        f"/api/v1/profiles/{profile['id']}/devices",
+        headers={"Authorization": f"Bearer {profile['bootstrap_token']}"},
+        json={"installation_id": f"test-{uuid.uuid4()}", "platform": "ANDROID"},
+    )
+    assert registered.status_code == 201
+    device_headers = {"Authorization": f"Bearer {registered.json()['access_token']}"}
+    link_code = await client.post(
+        f"/api/v1/profiles/{profile['id']}/adult-link-codes",
+        headers=device_headers,
+    )
+    assert link_code.status_code == 201
+    email = "functional-tests@example.com"
+    requested = await client.post("/api/v1/auth/adult/otp/request", json={"email": email})
+    verified = await client.post(
+        "/api/v1/auth/adult/otp/verify",
+        json={"email": email, "code": requested.json()["dev_code"]},
+    )
+    adult_headers = {"Authorization": f"Bearer {verified.json()['access_token']}"}
+    claimed = await client.post(
+        "/api/v1/adult/profile-links/claim",
+        headers=adult_headers,
+        json={"code": link_code.json()["code"]},
+    )
+    assert claimed.status_code == 200
+    client.headers.update(adult_headers)
+    profile["_device_headers"] = device_headers
+    return profile
 
 
 async def create_context(client, profile_id, **overrides):
@@ -130,9 +162,9 @@ async def test_update_profile_returns_detail_and_preserves_settings(client):
 
 @pytest.mark.asyncio
 async def test_create_profile_with_settings_atomically(client):
-    response = await client.post(
-        "/api/v1/profiles",
-        json={
+    result = await create_profile(
+        client,
+        {
             "alias": "Perfil con horarios",
             "age": 9,
             "avatar": "frog",
@@ -144,8 +176,6 @@ async def test_create_profile_with_settings_atomically(client):
             },
         },
     )
-    assert response.status_code == 201
-    result = response.json()
     assert result["active"] is True
     assert result["settings"]["school_start"] == "08:00:00"
     assert result["settings"]["sleep_end"] == "07:00:00"
@@ -266,9 +296,10 @@ async def test_update_settings_keeps_single_resource(client):
 
 @pytest.mark.asyncio
 async def test_settings_for_missing_profile_returns_404(client):
+    await create_profile(client)
     missing_id = "00000000-0000-0000-0000-000000000000"
-    assert (await client.get(f"/api/v1/profiles/{missing_id}/settings")).status_code == 404
-    assert (await client.put(f"/api/v1/profiles/{missing_id}/settings", json={})).status_code == 404
+    assert (await client.get(f"/api/v1/profiles/{missing_id}/settings")).status_code == 403
+    assert (await client.put(f"/api/v1/profiles/{missing_id}/settings", json={})).status_code == 403
 
 
 @pytest.mark.asyncio
@@ -441,10 +472,11 @@ async def test_activity_preferences_additional_notes_limit(client):
 
 @pytest.mark.asyncio
 async def test_activity_preferences_for_missing_profile_returns_404(client):
+    await create_profile(client)
     missing_id = "00000000-0000-0000-0000-000000000000"
     url = f"/api/v1/profiles/{missing_id}/activity-preferences"
-    assert (await client.get(url)).status_code == 404
-    assert (await client.put(url, json={})).status_code == 404
+    assert (await client.get(url)).status_code == 403
+    assert (await client.put(url, json={})).status_code == 403
 
 
 @pytest.mark.asyncio
@@ -586,12 +618,13 @@ async def test_delete_profile_context(client):
 
 @pytest.mark.asyncio
 async def test_profile_context_for_missing_profile_returns_404(client):
+    await create_profile(client)
     missing_id = "00000000-0000-0000-0000-000000000000"
     response = await client.post(
         f"/api/v1/profiles/{missing_id}/contexts",
         json={"type": "VACATION", "start_date": "2026-10-01"},
     )
-    assert response.status_code == 404
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -619,7 +652,11 @@ async def test_cannot_update_or_delete_context_from_another_profile(client):
 @pytest.mark.asyncio
 async def test_register_usage_and_get_history(client, adult_session):
     profile = await create_profile(client)
-    response = await client.post(f"/api/v1/profiles/{profile['id']}/usage", json=usage_payload())
+    response = await client.post(
+        f"/api/v1/profiles/{profile['id']}/usage",
+        headers=profile["_device_headers"],
+        json=usage_payload(),
+    )
     assert response.status_code == 201
     assert response.json()["applications"][0]["usage_minutes"] == 80
     headers, _ = await adult_session(profile["id"])
@@ -632,14 +669,22 @@ async def test_register_usage_and_get_history(client, adult_session):
 async def test_reject_duplicate_usage(client):
     profile = await create_profile(client)
     url = f"/api/v1/profiles/{profile['id']}/usage"
-    assert (await client.post(url, json=usage_payload())).status_code == 201
-    assert (await client.post(url, json=usage_payload())).status_code == 409
+    assert (
+        await client.post(url, headers=profile["_device_headers"], json=usage_payload())
+    ).status_code == 201
+    assert (
+        await client.post(url, headers=profile["_device_headers"], json=usage_payload())
+    ).status_code == 409
 
 
 @pytest.mark.asyncio
 async def test_analysis_uses_mock(client, adult_session):
     profile = await create_profile(client)
-    await client.post(f"/api/v1/profiles/{profile['id']}/usage", json=usage_payload())
+    await client.post(
+        f"/api/v1/profiles/{profile['id']}/usage",
+        headers=profile["_device_headers"],
+        json=usage_payload(),
+    )
     headers, _ = await adult_session(profile["id"])
     response = await client.post(
         f"/api/v1/profiles/{profile['id']}/analysis",

@@ -13,6 +13,7 @@ from app.services.adult_profile_service import AdultProfileService
 from app.services.profile_link_service import ProfileLinkService
 
 TEST_JWT_SECRET = "test-only-adult-auth-secret-at-least-32-characters"
+DEVICE_HEADERS_BY_PROFILE = {}
 
 
 async def create_profile(client, *, alias="Perfil vinculable", active=True):
@@ -21,7 +22,18 @@ async def create_profile(client, *, alias="Perfil vinculable", active=True):
         json={"alias": alias, "age": 9, "avatar": "fox", "active": active},
     )
     assert response.status_code == 201
-    return response.json()
+    profile = response.json()
+    if active:
+        registered = await client.post(
+            f"/api/v1/profiles/{profile['id']}/devices",
+            headers={"Authorization": f"Bearer {profile['bootstrap_token']}"},
+            json={"installation_id": f"adult-link-{uuid.uuid4()}", "platform": "ANDROID"},
+        )
+        assert registered.status_code == 201
+        DEVICE_HEADERS_BY_PROFILE[profile["id"]] = {
+            "Authorization": f"Bearer {registered.json()['access_token']}"
+        }
+    return profile
 
 
 async def authenticate(client, db_session, email):
@@ -38,7 +50,10 @@ async def authenticate(client, db_session, email):
 
 
 async def generate_adult_link_code(client, profile_id):
-    response = await client.post(f"/api/v1/profiles/{profile_id}/adult-link-codes")
+    response = await client.post(
+        f"/api/v1/profiles/{profile_id}/adult-link-codes",
+        headers=DEVICE_HEADERS_BY_PROFILE[profile_id],
+    )
     assert response.status_code == 201
     return response.json()
 
@@ -60,7 +75,10 @@ async def test_generate_adult_link_code_hashes_it_and_sets_expiration(client, db
     profile = await create_profile(client)
     before = datetime.now(timezone.utc)
 
-    response = await client.post(f"/api/v1/profiles/{profile['id']}/adult-link-codes")
+    response = await client.post(
+        f"/api/v1/profiles/{profile['id']}/adult-link-codes",
+        headers=DEVICE_HEADERS_BY_PROFILE[profile["id"]],
+    )
 
     assert response.status_code == 201
     body = response.json()
@@ -79,13 +97,18 @@ async def test_generate_adult_link_code_hashes_it_and_sets_expiration(client, db
 
 @pytest.mark.asyncio
 async def test_generate_adult_link_code_validates_profile(client):
-    missing = await client.post(f"/api/v1/profiles/{uuid.uuid4()}/adult-link-codes")
-    inactive = await create_profile(client, active=False)
-    rejected = await client.post(f"/api/v1/profiles/{inactive['id']}/adult-link-codes")
+    own = await create_profile(client)
+    missing = await client.post(
+        f"/api/v1/profiles/{uuid.uuid4()}/adult-link-codes",
+        headers=DEVICE_HEADERS_BY_PROFILE[own["id"]],
+    )
+    rejected = await client.post(
+        f"/api/v1/profiles/{own['id']}/adult-link-codes",
+        json={},
+    )
 
-    assert missing.status_code == 404
-    assert rejected.status_code == 409
-    assert rejected.json()["detail"] == "Profile is inactive"
+    assert missing.status_code == 403
+    assert rejected.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -391,7 +414,7 @@ def test_adult_profile_link_openapi_contract():
     claim = schema["paths"]["/api/v1/adult/profile-links/claim"]["post"]
     request_schema = schema["components"]["schemas"]["AdultProfileLinkClaimRequest"]
 
-    assert "security" not in generation
+    assert generation["security"] == [{"DeviceBearer": []}]
     assert claim["security"] == [{"AdultBearer": []}]
     assert request_schema["properties"].keys() == {"code"}
     assert request_schema["additionalProperties"] is False

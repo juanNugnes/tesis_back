@@ -11,14 +11,20 @@ from app.schemas.profile import ProfileCreate, ProfileUpdate
 class ProfileRepository:
     def __init__(self, db: AsyncSession): self.db = db
 
-    async def create(self, data: ProfileCreate) -> Profile:
+    async def create(self, data: ProfileCreate, *, commit: bool = True) -> Profile:
         values = data.model_dump(exclude={"settings"})
         profile = Profile(**values)
         if data.settings is not None:
             profile.settings = ProfileSettings(**data.settings.model_dump())
         self.db.add(profile)
+        await self.db.flush()
+        if not commit:
+            return profile
         await self.db.commit()
-        return await self.get(profile.id)
+        persisted = await self.get(profile.id)
+        if persisted is None:
+            raise RuntimeError("Created profile could not be reloaded")
+        return persisted
 
     async def get(self, profile_id: uuid.UUID) -> Profile | None:
         result = await self.db.execute(

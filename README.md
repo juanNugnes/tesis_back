@@ -159,28 +159,34 @@ Ejemplo sin restricciones:
 
 Las colecciones no aceptan duplicados. `additional_notes` admite hasta 500 caracteres. Al cambiar `adaptation_type` a `NONE`, el backend limpia `valid_until` y conserva las demas preferencias declaradas.
 
-## Identidad de dispositivo y vinculacion temporal (MVP)
+## Identidad de dispositivo y bootstrap
 
-Para un perfil nuevo, Android conserva su identificador de instalacion y registra el dispositivo en dos pasos:
+Un Profile nuevo se crea junto con una credencial bootstrap opaca de alta entropia:
 
 ```text
 POST /api/v1/profiles
--> profile_id
+-> campos de ProfileDetailRead + bootstrap_token + bootstrap_expires_at
+
 POST /api/v1/profiles/{profile_id}/devices
+Authorization: Bearer <bootstrap_token>
+-> campos de DeviceRead + access_token + token_type + expires_in
 ```
 
-Si una instalacion pierde el `profile_id`, el flujo provisional de recuperacion es:
+Los campos existentes de la respuesta de Profile permanecen en el nivel superior para reducir la ruptura del consumidor Android. El bootstrap dura 10 minutos, esta asociado a un solo Profile, se almacena como HMAC-SHA256 y se consume una sola vez dentro de la misma transaccion que crea el Device. `installation_id` sigue siendo solamente un identificador: nunca autoriza una operacion.
+
+El Device JWT HS256 usa un secreto separado y contiene solamente `sub=Device.id`, `type=device_access`, `iat` y `exp`. La autorizacion obtiene `profile_id` desde el Device persistido. Desactivar el Device o el Profile invalida inmediatamente el acceso aunque el JWT no haya expirado.
+
+La recuperacion o alta de otro Device conserva el flujo humano de seis digitos:
 
 ```text
-POST /api/v1/profiles/{profile_id}/device-link-codes
--> codigo temporal
-POST /api/v1/device-links/claim
--> Device + ProfileDetailRead
+Adult autorizado -> POST /profiles/{profile_id}/device-link-codes
+Nuevo dispositivo -> POST /device-links/claim
+-> Device + ProfileDetailRead + Device access token
 ```
 
-El codigo `DEVICE_LINK` tiene seis digitos, dura 10 minutos, se almacena como HMAC-SHA256 y se consume una sola vez. No es una identidad permanente. Su generacion requiere un JWT adulto y un `AdultProfileLink` activo; el claim sigue siendo publico porque el dispositivo aun esta recuperando su identidad.
+El codigo `DEVICE_LINK` dura 10 minutos, se almacena como HMAC-SHA256 y se consume una sola vez. El claim no exige Device token porque el codigo temporal es su credencial de recuperacion. Si la instalacion ya corresponde al Profile, devuelve el Device existente y emite un token nuevo sin duplicarlo.
 
-`last_seen_at` se inicializa al registrar o vincular el Device, pero esta version no lo actualiza automaticamente en cada request. La concurrencia del claim se protege con locking y consumo condicional en PostgreSQL; falta una prueba de integracion concurrente contra PostgreSQL porque la suite usa SQLite.
+`last_seen_at` se inicializa al registrar o vincular el Device, pero esta version no lo actualiza automaticamente en cada request. La concurrencia se protege con locking y consumo condicional en PostgreSQL; falta una prueba concurrente de integracion contra PostgreSQL porque la suite usa SQLite. Los Profiles cuyo bootstrap nunca se completa requieren una futura politica operativa de limpieza.
 
 ## Autenticacion y autorizacion adulta
 
@@ -199,23 +205,24 @@ Clasificacion actual de acceso:
 
 | Clase | Endpoints | Estado |
 |---|---|---|
-| Adult-only | `GET /usage`, `GET /usage/{day}`, todos los `/analysis`, generar `/device-link-codes`, `/auth/adult/me`, `/adult/profiles` | Bearer adulto + link activo cuando hay `profile_id` |
-| Device-only | `POST /usage` | Abierto temporalmente; **DEVICE AUTH REQUIRED** |
-| Shared | Profile GET/PUT, Settings, ActivityPreferences y Context CRUD | Abiertos para no romper Android; requieren principal Adult o Device en una etapa futura |
-| Bootstrap | `POST /profiles`, registrar Device y `POST /device-links/claim` | Abiertos por el flujo actual; ownership/bootstrap definitivo pendiente |
+| Adult-only | `GET /usage`, `GET /usage/{day}`, todos los `/analysis`, generar `/device-link-codes`, Context CRUD, `/auth/adult/me`, `/adult/profiles` | `AdultBearer` + link activo cuando hay `profile_id` |
+| Device-only | `POST /usage`, generar `/adult-link-codes` | `DeviceBearer` + `Device.profile_id` coincidente |
+| Adult-or-Device | Profile GET/PUT, Settings GET/PUT y ActivityPreferences GET/PUT | JWT con type explicito y autorizacion consultada en DB |
+| Bootstrap | `POST /profiles`, registrar primer Device y `POST /device-links/claim` | Profile creation publica; registro con `DeviceBootstrapBearer`; claim con codigo temporal |
+| Public | OTP request/verify y `/health` | Sin principal previo |
 
-No se usa la ausencia de token como identidad infantil. Los endpoints compartidos siguen abiertos de forma explicita hasta implementar credenciales Device. Un adulto autenticado sin link recibe `403` tanto para un Profile ajeno como para un UUID inexistente. `AdultProfileLink` se crea mediante el claim autenticado descripto a continuacion; ningun endpoint acepta `adult_id` o `profile_id` enviados por el adulto para crear esa relacion.
+No se usa la ausencia de token como identidad infantil. Un principal autenticado sin acceso recibe `403`; un Device o Adult inactivo recibe `401`. `AdultProfileLink` se crea mediante el claim autenticado descripto a continuacion; ningun endpoint acepta `adult_id` o `profile_id` enviados por el adulto para crear esa relacion.
 
 ## Vinculacion AdultAccount - Profile
 
-El dispositivo infantil puede generar un codigo temporal para vincular el Profile con una cuenta adulta:
+El dispositivo infantil autenticado puede generar un codigo temporal para vincular su Profile con una cuenta adulta:
 
 ```text
 POST /api/v1/profiles/{profile_id}/adult-link-codes
 -> codigo ADULT_PROFILE_LINK de seis digitos
 ```
 
-Este endpoint es un bootstrap provisional sin autenticacion porque todavia no existe una credencial Device verificable. Conocer o enviar un `device_id` o `installation_id` no prueba control del dispositivo. **DEVICE AUTH REQUIRED BEFORE PRODUCTION.**
+El endpoint exige `DeviceBearer` y comprueba en DB que el Device pertenece al `profile_id` del path. Un Adult JWT, un Device de otro Profile o un `installation_id` sin credencial no autorizan la generacion.
 
 Despues de validar su email mediante OTP, el adulto reclama el codigo con su JWT:
 
@@ -235,7 +242,13 @@ Si el vinculo activo ya existe, el claim es idempotente, consume el nuevo codigo
 
 Este flujo demuestra control del email y posesion del codigo temporal, y crea una relacion tecnica `AdultProfileLink`. **Representative verification is not implemented in this stage.** No demuestra parentesco, tutela ni representacion legal.
 
-Esta etapa implementa autenticacion y autorizacion adulta basica, no cumplimiento legal integral. Siguen pendientes consentimiento y su revocacion, verificacion de representante, bloqueo de ingestion, Device authentication, acceso/rectificacion/supresion, retencion, auditoria completa, rate limiting y hardening productivo.
+## Cambios requeridos en Android
+
+Android debe conservar `bootstrap_token` al crear el Profile, enviarlo como Bearer al registrar el primer Device y reemplazarlo por el `access_token` Device devuelto. Tambien debe guardar el token nuevo recibido por `/device-links/claim`, enviar `DeviceBearer` en Usage, Profile, Settings, ActivityPreferences y generacion de `adult-link-codes`, y borrar o renovar la credencial cuando el backend responda `401`.
+
+No hay refresh token Device en esta etapa. La renovacion requiere un nuevo `DEVICE_LINK`; siguen pendientes una estrategia de refresh/rotacion, limpieza de Profiles huerfanos, UI de revocacion, rate limiting, almacenamiento seguro en Android y hardening productivo.
+
+Esta etapa implementa autenticacion Device y adulta basica, no cumplimiento legal integral. Siguen pendientes consentimiento y su revocacion, verificacion de representante, acceso/rectificacion/supresion, retencion y auditoria legal completa.
 
 ## Estado del análisis
 

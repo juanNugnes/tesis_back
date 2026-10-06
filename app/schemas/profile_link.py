@@ -27,6 +27,9 @@ class DeviceLinkClaimRequest(DeviceCreate):
 class DeviceLinkClaimResponse(BaseModel):
     device: DeviceRead
     profile: ProfileDetailRead
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
 
 
 class AdultProfileLinkClaimRequest(BaseModel):

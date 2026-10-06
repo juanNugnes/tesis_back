@@ -98,6 +98,10 @@ class Profile(Base):
     )
     devices: Mapped[list["Device"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
     link_codes: Mapped[list["ProfileLinkCode"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
+    bootstrap_tokens: Mapped[list["DeviceBootstrapToken"]] = relationship(
+        back_populates="profile",
+        cascade="all, delete-orphan",
+    )
     adult_links: Mapped[list["AdultProfileLink"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
 
 
@@ -215,6 +219,19 @@ class ProfileLinkCode(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     profile: Mapped[Profile] = relationship(back_populates="link_codes")
+
+
+class DeviceBootstrapToken(Base):
+    __tablename__ = "device_bootstrap_tokens"
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_device_bootstrap_tokens_hash"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    profile: Mapped[Profile] = relationship(back_populates="bootstrap_tokens")
 
 
 class DailyUsage(Base):
