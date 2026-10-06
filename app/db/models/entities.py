@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime, time, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint, true
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint, text, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -77,6 +77,37 @@ class ActivityToAvoid(str, enum.Enum):
     LOUD_SOUNDS = "LOUD_SOUNDS"
     HIGH_STIMULATION = "HIGH_STIMULATION"
     PROLONGED_CONCENTRATION = "PROLONGED_CONCENTRATION"
+
+
+class RepresentativeVerificationStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class ConsentStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    REVOKED = "REVOKED"
+
+
+class ConsentPurposeType(str, enum.Enum):
+    USAGE_MONITORING = "USAGE_MONITORING"
+
+
+class AuditActorType(str, enum.Enum):
+    ADULT = "ADULT"
+    INTERNAL = "INTERNAL"
+
+
+class AuditEventType(str, enum.Enum):
+    REPRESENTATIVE_VERIFICATION_APPROVED = "REPRESENTATIVE_VERIFICATION_APPROVED"
+    REPRESENTATIVE_VERIFICATION_REJECTED = "REPRESENTATIVE_VERIFICATION_REJECTED"
+    CONSENT_GRANTED = "CONSENT_GRANTED"
+    CONSENT_REVOKED = "CONSENT_REVOKED"
+
+
+class AuditResult(str, enum.Enum):
+    SUCCESS = "SUCCESS"
 
 
 class Profile(Base):
@@ -179,6 +210,91 @@ class AdultProfileLink(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     adult: Mapped[AdultAccount] = relationship(back_populates="profile_links")
     profile: Mapped[Profile] = relationship(back_populates="adult_links")
+
+
+class RepresentativeVerification(Base):
+    __tablename__ = "representative_verifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "adult_id",
+            "profile_id",
+            name="uq_representative_verifications_adult_profile",
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    adult_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("adult_accounts.id", ondelete="CASCADE"), index=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    status: Mapped[RepresentativeVerificationStatus] = mapped_column(
+        Enum(RepresentativeVerificationStatus, name="representative_verification_status"),
+        default=RepresentativeVerificationStatus.PENDING,
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Consent(Base):
+    __tablename__ = "consents"
+    __table_args__ = (
+        Index("ix_consents_status", "status"),
+        Index("ix_consents_revoked_at", "revoked_at"),
+        Index(
+            "uq_consents_active_adult_profile",
+            "adult_id",
+            "profile_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+            sqlite_where=text("status = 'ACTIVE'"),
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    adult_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("adult_accounts.id", ondelete="CASCADE"), index=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    status: Mapped[ConsentStatus] = mapped_column(Enum(ConsentStatus, name="consent_status"))
+    privacy_notice_version: Mapped[str] = mapped_column(String(50))
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    purposes: Mapped[list["ConsentPurpose"]] = relationship(
+        back_populates="consent",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class ConsentPurpose(Base):
+    __tablename__ = "consent_purposes"
+    consent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("consents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    purpose: Mapped[ConsentPurposeType] = mapped_column(
+        Enum(ConsentPurposeType, name="consent_purpose_type"),
+        primary_key=True,
+    )
+    consent: Mapped[Consent] = relationship(back_populates="purposes")
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    actor_type: Mapped[AuditActorType] = mapped_column(Enum(AuditActorType, name="audit_actor_type"))
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    event_type: Mapped[AuditEventType] = mapped_column(
+        Enum(AuditEventType, name="audit_event_type"),
+        index=True,
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    result: Mapped[AuditResult] = mapped_column(Enum(AuditResult, name="audit_result"))
+    event_metadata: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 
 
 class AdultOtpChallenge(Base):

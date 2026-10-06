@@ -18,6 +18,7 @@ from app.services.adult_auth_service import AdultAuthService
 from app.services.adult_profile_service import AdultProfileService
 from app.services.device_auth_service import DeviceAuthService
 from app.services.device_bootstrap_service import DeviceBootstrapService
+from app.services.monitoring_authorization_service import MonitoringAuthorizationService
 from app.services.otp_delivery_service import DevelopmentOtpDeliveryService, OtpDeliveryService
 
 adult_bearer = HTTPBearer(auto_error=False, scheme_name="AdultBearer")
@@ -151,6 +152,19 @@ async def require_device_profile_access(
     if current_device.profile_id != profile_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Profile access denied")
     return current_device.profile
+
+
+async def require_usage_monitoring_authorization(
+    profile: Profile = Depends(require_device_profile_access),
+    db: AsyncSession = Depends(get_db),
+) -> Profile:
+    allowed = await MonitoringAuthorizationService(db).is_usage_monitoring_allowed(profile.id)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Monitoring authorization is not active",
+        )
+    return profile
 
 
 async def require_profile_principal_access(

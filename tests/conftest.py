@@ -10,15 +10,20 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import select
 
 from app.db.base import Base
+from app.db.models import AdultProfileLink
 from app.db.session import get_db
 from app.api.dependencies import get_otp_delivery_service
 from app.main import app
 from app.repositories.adult_account_repository import AdultAccountRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.services.adult_profile_service import AdultProfileService
+from app.services.consent_service import ConsentService
 from app.services.otp_delivery_service import FakeOtpDeliveryService
+from app.services.representative_verification_service import RepresentativeVerificationService
+from app.db.models import ConsentPurposeType
 
 
 @pytest.fixture
@@ -81,4 +86,36 @@ async def adult_session(client, db_session):
         }, adult
 
     return create
+
+
+@pytest_asyncio.fixture
+async def monitoring_authorization(db_session):
+    async def authorize(profile_id, *, adult=None, privacy_notice_version="1.0"):
+        parsed_profile_id = uuid.UUID(str(profile_id))
+        if adult is None:
+            link = await db_session.scalar(
+                select(AdultProfileLink).where(
+                    AdultProfileLink.profile_id == parsed_profile_id,
+                    AdultProfileLink.active.is_(True),
+                )
+            )
+            assert link is not None
+            adult = await AdultAccountRepository(db_session).get(link.adult_id)
+        profile = await ProfileRepository(db_session).get(parsed_profile_id)
+        assert adult is not None
+        assert profile is not None
+        await RepresentativeVerificationService(db_session).approve(
+            adult.id,
+            profile.id,
+            verified_by="pytest",
+        )
+        result = await ConsentService(db_session).grant(
+            adult,
+            profile,
+            privacy_notice_version=privacy_notice_version,
+            purposes=[ConsentPurposeType.USAGE_MONITORING],
+        )
+        return result.consent
+
+    return authorize
 

@@ -300,11 +300,19 @@ async def test_inactive_profile_invalidates_existing_device_token(client, db_ses
 
 
 @pytest.mark.asyncio
-async def test_device_is_authorized_only_for_its_persisted_profile(client):
+async def test_device_is_authorized_only_for_its_persisted_profile(
+    client,
+    adult_session,
+    monitoring_authorization,
+):
     profile_a = await create_profile(client, "Usage A")
     profile_b = await create_profile(client, "Usage B")
     _, headers_a = await register_device(client, profile_a)
     _, headers_b = await register_device(client, profile_b)
+    _, adult_a = await adult_session(profile_a["id"], email="usage-a@example.com")
+    _, adult_b = await adult_session(profile_b["id"], email="usage-b@example.com")
+    await monitoring_authorization(profile_a["id"], adult=adult_a)
+    await monitoring_authorization(profile_b["id"], adult=adult_b)
 
     own_a = await client.post(
         f"/api/v1/profiles/{profile_a['id']}/usage",

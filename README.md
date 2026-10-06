@@ -59,6 +59,10 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `POST /api/v1/auth/adult/otp/verify`
 - `GET /api/v1/auth/adult/me`
 - `GET /api/v1/adult/profiles`
+- `GET /api/v1/profiles/{profile_id}/representative-verification`
+- `POST /api/v1/profiles/{profile_id}/consents`
+- `GET /api/v1/profiles/{profile_id}/consents/current`
+- `POST /api/v1/profiles/{profile_id}/consents/{consent_id}/revoke`
 - `GET /api/v1/profiles/{profile_id}/settings`
 - `PUT /api/v1/profiles/{profile_id}/settings`
 - `GET /api/v1/profiles/{profile_id}/activity-preferences`
@@ -206,7 +210,7 @@ Clasificacion actual de acceso:
 | Clase | Endpoints | Estado |
 |---|---|---|
 | Adult-only | `GET /usage`, `GET /usage/{day}`, todos los `/analysis`, generar `/device-link-codes`, Context CRUD, `/auth/adult/me`, `/adult/profiles` | `AdultBearer` + link activo cuando hay `profile_id` |
-| Device-only | `POST /usage`, generar `/adult-link-codes` | `DeviceBearer` + `Device.profile_id` coincidente |
+| Device-only | `POST /usage`, generar `/adult-link-codes` | `DeviceBearer` + `Device.profile_id` coincidente; Usage ademas requiere autorizacion de monitoreo vigente |
 | Adult-or-Device | Profile GET/PUT, Settings GET/PUT y ActivityPreferences GET/PUT | JWT con type explicito y autorizacion consultada en DB |
 | Bootstrap | `POST /profiles`, registrar primer Device y `POST /device-links/claim` | Profile creation publica; registro con `DeviceBootstrapBearer`; claim con codigo temporal |
 | Public | OTP request/verify y `/health` | Sin principal previo |
@@ -240,7 +244,42 @@ El DTO admite solamente `code`: `adult_id` se obtiene del JWT validado y `profil
 
 Si el vinculo activo ya existe, el claim es idempotente, consume el nuevo codigo y devuelve el mismo vinculo. Si el vinculo fue revocado, responde `409` y no consume el codigo; la reautorizacion se definira junto con consentimiento y verificacion de representante. Un claim exitoso aparece inmediatamente en `GET /api/v1/adult/profiles` y habilita los endpoints adult-only con el mismo JWT, porque la autorizacion consulta la base de datos en cada request.
 
-Este flujo demuestra control del email y posesion del codigo temporal, y crea una relacion tecnica `AdultProfileLink`. **Representative verification is not implemented in this stage.** No demuestra parentesco, tutela ni representacion legal.
+Este flujo demuestra control del email y posesion del codigo temporal, y crea una relacion tecnica `AdultProfileLink`. No demuestra parentesco, tutela ni representacion legal. Cada vinculo nuevo crea una `RepresentativeVerification` en estado `PENDING`, que solo puede actualizarse mediante el proceso manual interno descripto debajo.
+
+## Verificacion manual y consentimiento de monitoreo
+
+El flujo tecnico del MVP es:
+
+```text
+Adult autenticado
+-> AdultProfileLink activo
+-> revision manual de RepresentativeVerification
+-> APPROVED
+-> aceptacion de una version explicita del aviso de privacidad
+-> Consent ACTIVE con purpose USAGE_MONITORING
+-> Device habilitado para enviar nuevas metricas Usage
+```
+
+El adulto puede consultar su verificacion, otorgar consentimiento, consultar el consentimiento actual y revocarlo mediante los cuatro endpoints de Profile documentados arriba. Todos requieren `AdultBearer` y un `AdultProfileLink` activo. `adult_id` se deriva del JWT y nunca se acepta en path o body. Un grant activo identico es idempotente; una revocacion repetida devuelve el mismo recurso sin agregar otro evento. Volver a consentir despues de una revocacion crea una fila nueva y conserva la historia.
+
+Las finalidades se almacenan normalizadas en `consent_purposes`. Como el MVP admite unicamente `USAGE_MONITORING`, el indice parcial unico sobre Adult/Profile equivale hoy a la regla Adult/Profile/Purpose. Incorporar una segunda finalidad requerira ampliar ese constraint sin cambiar el historial existente.
+
+No existe un endpoint HTTP para aprobar o rechazar la verificacion. En desarrollo u operacion controlada se usa el helper interno:
+
+```bash
+python -m scripts.set_representative_verification <adult_id> <profile_id> APPROVED --verified-by manual-mvp
+python -m scripts.set_representative_verification <adult_id> <profile_id> REJECTED --verified-by manual-mvp --notes "revision manual"
+```
+
+`verified_by` es un identificador operativo provisional hasta que exista identidad administrativa. La revision manual registra resultado y observacion minima; esta etapa no almacena copias de DNI, pasaporte, partidas, fotografias ni otros documentos.
+
+Para aceptar `POST /usage` debe existir al menos un adulto del Profile con vinculo activo, verificacion `APPROVED` y consentimiento `ACTIVE` para `USAGE_MONITORING`. No se exige que todos los adultos vinculados consientan. Un vinculo revocado o una verificacion que luego pasa a `REJECTED` deja de contar aunque el Consent permanezca `ACTIVE`.
+
+La revocacion se aplica al momento de recepcion: el mismo Device JWT recibe `403 Monitoring authorization is not active` en todo POST posterior, incluso si el payload corresponde a una fecha anterior. No hay una excepcion para cargas offline historicas. La revocacion no borra Usage ni Analysis previos; los endpoints adultos de consulta y Analysis conservan su autorizacion historica actual. Supresion y retencion son flujos futuros separados.
+
+Los cambios `APPROVED`, `REJECTED`, `CONSENT_GRANTED` y `CONSENT_REVOKED` generan `AuditEvent` con actor, Profile, resultado y metadata minima. El audit no guarda OTP, JWT, codigos temporales, documentos ni payloads de Usage, y no se usa como fuente de verdad para autorizar.
+
+El email/OTP, `ADULT_PROFILE_LINK` y estos controles no prueban por si solos representacion legal. `RepresentativeVerification` representa un proceso manual MVP. Estos controles implementan requisitos tecnicos del MVP y no constituyen por si solos una evaluacion de cumplimiento legal integral.
 
 ## Cambios requeridos en Android
 
@@ -248,7 +287,7 @@ Android debe conservar `bootstrap_token` al crear el Profile, enviarlo como Bear
 
 No hay refresh token Device en esta etapa. La renovacion requiere un nuevo `DEVICE_LINK`; siguen pendientes una estrategia de refresh/rotacion, limpieza de Profiles huerfanos, UI de revocacion, rate limiting, almacenamiento seguro en Android y hardening productivo.
 
-Esta etapa implementa autenticacion Device y adulta basica, no cumplimiento legal integral. Siguen pendientes consentimiento y su revocacion, verificacion de representante, acceso/rectificacion/supresion, retencion y auditoria legal completa.
+Siguen pendientes una estrategia de refresh/rotacion, acceso/rectificacion/supresion, retencion automatica, exportacion, identidad administrativa y una auditoria legal completa.
 
 ## Estado del análisis
 

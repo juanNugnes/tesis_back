@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import AdultAccount, AdultProfileLink, Profile
 from app.repositories.adult_profile_link_repository import AdultProfileLinkRepository
 from app.repositories.profile_repository import ProfileRepository
+from app.repositories.representative_verification_repository import RepresentativeVerificationRepository
 
 
 class AdultProfileService:
@@ -17,6 +18,7 @@ class AdultProfileService:
         self.db = db
         self.repository = repository or AdultProfileLinkRepository(db)
         self.profiles = ProfileRepository(db)
+        self.verifications = RepresentativeVerificationRepository(db)
 
     async def get_authorized_profile(
         self,
@@ -35,6 +37,9 @@ class AdultProfileService:
         else:
             link.active = True
             link.revoked_at = None
+        verification = await self.verifications.get_by_adult_profile(adult.id, profile.id)
+        if verification is None:
+            await self.verifications.create_pending(adult.id, profile.id)
         await self.db.commit()
         return link
 

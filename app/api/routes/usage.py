@@ -4,7 +4,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import require_device_profile_access, require_profile_access
+from app.api.dependencies import require_profile_access, require_usage_monitoring_authorization
 from app.db.models import Profile
 from app.db.session import get_db
 from app.repositories.usage_repository import UsageRepository
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/profiles/{profile_id}/usage", tags=["usage"])
 
 
 @router.post("", response_model=DailyUsageRead, status_code=status.HTTP_201_CREATED)
-async def create_usage(data: DailyUsageCreate, profile: Profile = Depends(require_device_profile_access), db: AsyncSession = Depends(get_db)):
+async def create_usage(data: DailyUsageCreate, profile: Profile = Depends(require_usage_monitoring_authorization), db: AsyncSession = Depends(get_db)):
     try:
         return await UsageService(UsageRepository(db)).create(profile.id, data)
     except DuplicateUsageError:

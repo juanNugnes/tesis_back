@@ -12,6 +12,7 @@ from app.repositories.adult_profile_link_repository import AdultProfileLinkRepos
 from app.repositories.device_repository import DeviceRepository
 from app.repositories.profile_link_code_repository import ProfileLinkCodeRepository
 from app.repositories.profile_repository import ProfileRepository
+from app.repositories.representative_verification_repository import RepresentativeVerificationRepository
 from app.schemas.device import DeviceCreate
 from app.schemas.profile_link import (
     AdultProfileLinkClaimRequest,
@@ -78,6 +79,7 @@ class ProfileLinkService:
         self.profiles = ProfileRepository(db)
         self.devices = DeviceRepository(db)
         self.adult_links = AdultProfileLinkRepository(db)
+        self.verifications = RepresentativeVerificationRepository(db)
         self.device_service = DeviceService(db, self.devices)
 
     def hash_code(self, code: str) -> str:
@@ -209,6 +211,10 @@ class ProfileLinkService:
                 adult_link = await self.adult_links.create_link(adult.id, profile.id)
             elif not adult_link.active or adult_link.revoked_at is not None:
                 raise RevokedAdultProfileLinkError
+
+            verification = await self.verifications.get_by_adult_profile(adult.id, profile.id)
+            if verification is None:
+                await self.verifications.create_pending(adult.id, profile.id)
 
             consumed = await self.link_codes.mark_used_if_valid(
                 link_code.id,  # type: ignore[union-attr]
