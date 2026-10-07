@@ -84,6 +84,40 @@ class RepresentativeVerificationService:
             notes=notes,
         )
 
+    async def approve_automatically(
+        self,
+        adult_id: uuid.UUID,
+        profile_id: uuid.UUID,
+        *,
+        commit: bool = True,
+    ) -> RepresentativeVerification:
+        verification = await self.ensure_pending(adult_id, profile_id, commit=False)
+        if verification.status in {
+            RepresentativeVerificationStatus.APPROVED,
+            RepresentativeVerificationStatus.REJECTED,
+        }:
+            if commit:
+                await self.db.commit()
+            return verification
+
+        now = datetime.now(timezone.utc)
+        verification = await self.verifications.approve(
+            verification,
+            verified_at=now,
+            verified_by="automatic-mvp",
+            notes=None,
+        )
+        await self.audit.append(
+            actor_type=AuditActorType.INTERNAL,
+            actor_id=None,
+            profile_id=profile_id,
+            event_type=AuditEventType.REPRESENTATIVE_VERIFICATION_APPROVED,
+            metadata={"verified_by": "automatic-mvp"},
+        )
+        if commit:
+            await self.db.commit()
+        return verification
+
     async def reject(
         self,
         adult_id: uuid.UUID,

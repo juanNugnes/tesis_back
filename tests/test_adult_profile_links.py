@@ -5,12 +5,23 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import func, select
 
+from app.core.config import get_settings
 from app.core.security import AdultAccessTokenCodec
-from app.db.models import AdultProfileLink, Profile, ProfileLinkCode
+from app.db.models import (
+    AdultProfileLink,
+    AuditEvent,
+    AuditEventType,
+    Consent,
+    Profile,
+    ProfileLinkCode,
+    RepresentativeVerification,
+    RepresentativeVerificationStatus,
+)
 from app.repositories.adult_account_repository import AdultAccountRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.services.adult_profile_service import AdultProfileService
 from app.services.profile_link_service import ProfileLinkService
+from app.services.representative_verification_service import RepresentativeVerificationService
 
 TEST_JWT_SECRET = "test-only-adult-auth-secret-at-least-32-characters"
 DEVICE_HEADERS_BY_PROFILE = {}
@@ -67,6 +78,14 @@ async def get_stored_code(db_session, profile_id, purpose="ADULT_PROFILE_LINK"):
         )
         .order_by(ProfileLinkCode.created_at.desc())
         .limit(1)
+    )
+
+
+def set_auto_approval(monkeypatch, enabled):
+    monkeypatch.setattr(
+        get_settings(),
+        "auto_approve_representative_verification",
+        enabled,
     )
 
 
@@ -404,6 +423,244 @@ async def test_profile_deactivated_after_generation_rejects_claim(client, db_ses
     stored = await get_stored_code(db_session, profile_data["id"])
     assert stored is not None
     assert stored.used_at is None
+
+
+@pytest.mark.asyncio
+async def test_enabled_flag_auto_approves_after_claim_and_audits_without_consent(
+    client,
+    db_session,
+    monkeypatch,
+):
+    set_auto_approval(monkeypatch, True)
+    profile = await create_profile(client)
+    code = await generate_adult_link_code(client, profile["id"])
+    headers, adult = await authenticate(client, db_session, "auto-approve@example.com")
+
+    response = await client.post(
+        "/api/v1/adult/profile-links/claim",
+        headers=headers,
+        json={"code": code["code"]},
+    )
+    second_code = await generate_adult_link_code(client, profile["id"])
+    repeated = await client.post(
+        "/api/v1/adult/profile-links/claim",
+        headers=headers,
+        json={"code": second_code["code"]},
+    )
+
+    assert response.status_code == 200
+    assert repeated.status_code == 200
+    verification = await db_session.scalar(
+        select(RepresentativeVerification).where(
+            RepresentativeVerification.adult_id == adult.id,
+            RepresentativeVerification.profile_id == uuid.UUID(profile["id"]),
+        )
+    )
+    assert verification is not None
+    assert verification.status == RepresentativeVerificationStatus.APPROVED
+    assert verification.verified_at is not None
+    assert verification.verified_by == "automatic-mvp"
+    approval_events = await db_session.scalar(
+        select(func.count())
+        .select_from(AuditEvent)
+        .where(
+            AuditEvent.profile_id == uuid.UUID(profile["id"]),
+            AuditEvent.event_type
+            == AuditEventType.REPRESENTATIVE_VERIFICATION_APPROVED,
+        )
+    )
+    event = await db_session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.profile_id == uuid.UUID(profile["id"]),
+            AuditEvent.event_type
+            == AuditEventType.REPRESENTATIVE_VERIFICATION_APPROVED,
+        )
+    )
+    assert approval_events == 1
+    assert event is not None
+    assert event.event_metadata == {"verified_by": "automatic-mvp"}
+    assert await db_session.scalar(select(func.count()).select_from(Consent)) == 0
+    granted = await client.post(
+        f"/api/v1/profiles/{profile['id']}/consents",
+        headers=headers,
+        json={
+            "privacy_notice_version": "1.0",
+            "purposes": ["USAGE_MONITORING"],
+        },
+    )
+    assert granted.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_enabled_flag_promotes_existing_pending_without_duplicate(
+    client,
+    db_session,
+    monkeypatch,
+):
+    set_auto_approval(monkeypatch, True)
+    profile_data = await create_profile(client)
+    code = await generate_adult_link_code(client, profile_data["id"])
+    headers, adult = await authenticate(client, db_session, "pending-auto@example.com")
+    profile = await ProfileRepository(db_session).get(uuid.UUID(profile_data["id"]))
+    assert profile is not None
+    await AdultProfileService(db_session).create_link(adult, profile)
+    pending = await db_session.scalar(
+        select(RepresentativeVerification).where(
+            RepresentativeVerification.adult_id == adult.id,
+            RepresentativeVerification.profile_id == profile.id,
+        )
+    )
+    assert pending is not None
+    pending_id = pending.id
+    adult_id = adult.id
+    profile_id = profile.id
+
+    response = await client.post(
+        "/api/v1/adult/profile-links/claim",
+        headers=headers,
+        json={"code": code["code"]},
+    )
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    verification = await db_session.get(RepresentativeVerification, pending_id)
+    assert verification is not None
+    assert verification.status == RepresentativeVerificationStatus.APPROVED
+    assert verification.verified_by == "automatic-mvp"
+    count = await db_session.scalar(
+        select(func.count())
+        .select_from(RepresentativeVerification)
+        .where(
+            RepresentativeVerification.adult_id == adult_id,
+            RepresentativeVerification.profile_id == profile_id,
+        )
+    )
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_enabled_flag_never_overwrites_rejected_verification(
+    client,
+    db_session,
+    monkeypatch,
+):
+    set_auto_approval(monkeypatch, True)
+    profile_data = await create_profile(client)
+    code = await generate_adult_link_code(client, profile_data["id"])
+    headers, adult = await authenticate(client, db_session, "rejected-auto@example.com")
+    profile = await ProfileRepository(db_session).get(uuid.UUID(profile_data["id"]))
+    assert profile is not None
+    await AdultProfileService(db_session).create_link(adult, profile)
+    rejected = await RepresentativeVerificationService(db_session).reject(
+        adult.id,
+        profile.id,
+        verified_by="manual-review",
+    )
+    rejected_id = rejected.id
+    profile_id = profile.id
+
+    response = await client.post(
+        "/api/v1/adult/profile-links/claim",
+        headers=headers,
+        json={"code": code["code"]},
+    )
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    verification = await db_session.get(RepresentativeVerification, rejected_id)
+    assert verification is not None
+    assert verification.status == RepresentativeVerificationStatus.REJECTED
+    assert verification.verified_by == "manual-review"
+    approved_events = await db_session.scalar(
+        select(func.count())
+        .select_from(AuditEvent)
+        .where(
+            AuditEvent.profile_id == profile_id,
+            AuditEvent.event_type
+            == AuditEventType.REPRESENTATIVE_VERIFICATION_APPROVED,
+        )
+    )
+    assert approved_events == 0
+
+
+@pytest.mark.asyncio
+async def test_disabled_flag_preserves_pending_manual_flow(
+    client,
+    db_session,
+    monkeypatch,
+):
+    set_auto_approval(monkeypatch, False)
+    profile = await create_profile(client)
+    code = await generate_adult_link_code(client, profile["id"])
+    headers, adult = await authenticate(client, db_session, "manual-flow@example.com")
+
+    response = await client.post(
+        "/api/v1/adult/profile-links/claim",
+        headers=headers,
+        json={"code": code["code"]},
+    )
+
+    assert response.status_code == 200
+    verification = await db_session.scalar(
+        select(RepresentativeVerification).where(
+            RepresentativeVerification.adult_id == adult.id,
+            RepresentativeVerification.profile_id == uuid.UUID(profile["id"]),
+        )
+    )
+    assert verification is not None
+    assert verification.status == RepresentativeVerificationStatus.PENDING
+    assert verification.verified_by is None
+    assert await db_session.scalar(select(func.count()).select_from(AuditEvent)) == 0
+
+
+@pytest.mark.asyncio
+async def test_otp_and_device_link_do_not_trigger_auto_approval(
+    client,
+    db_session,
+    monkeypatch,
+):
+    set_auto_approval(monkeypatch, True)
+    headers, adult = await authenticate(client, db_session, "non-trigger@example.com")
+    assert await db_session.scalar(
+        select(func.count()).select_from(RepresentativeVerification)
+    ) == 0
+
+    profile_data = await create_profile(client)
+    profile = await ProfileRepository(db_session).get(uuid.UUID(profile_data["id"]))
+    assert profile is not None
+    await AdultProfileService(db_session).create_link(adult, profile)
+    verification = await db_session.scalar(
+        select(RepresentativeVerification).where(
+            RepresentativeVerification.adult_id == adult.id,
+            RepresentativeVerification.profile_id == profile.id,
+        )
+    )
+    assert verification is not None
+    assert verification.status == RepresentativeVerificationStatus.PENDING
+    verification_id = verification.id
+
+    generated = await client.post(
+        f"/api/v1/profiles/{profile.id}/device-link-codes",
+        headers=headers,
+    )
+    claimed = await client.post(
+        "/api/v1/device-links/claim",
+        json={
+            "code": generated.json()["code"],
+            "installation_id": f"non-trigger-{uuid.uuid4()}",
+            "platform": "ANDROID",
+        },
+    )
+
+    assert generated.status_code == 201
+    assert claimed.status_code == 200
+    db_session.expire_all()
+    unchanged = await db_session.get(RepresentativeVerification, verification_id)
+    assert unchanged is not None
+    assert unchanged.status == RepresentativeVerificationStatus.PENDING
+    assert await db_session.scalar(
+        select(func.count()).select_from(AuditEvent)
+    ) == 0
 
 
 def test_adult_profile_link_openapi_contract():

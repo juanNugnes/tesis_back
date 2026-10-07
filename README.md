@@ -244,7 +244,7 @@ El DTO admite solamente `code`: `adult_id` se obtiene del JWT validado y `profil
 
 Si el vinculo activo ya existe, el claim es idempotente, consume el nuevo codigo y devuelve el mismo vinculo. Si el vinculo fue revocado, responde `409` y no consume el codigo; la reautorizacion se definira junto con consentimiento y verificacion de representante. Un claim exitoso aparece inmediatamente en `GET /api/v1/adult/profiles` y habilita los endpoints adult-only con el mismo JWT, porque la autorizacion consulta la base de datos en cada request.
 
-Este flujo demuestra control del email y posesion del codigo temporal, y crea una relacion tecnica `AdultProfileLink`. No demuestra parentesco, tutela ni representacion legal. Cada vinculo nuevo crea una `RepresentativeVerification` en estado `PENDING`, que solo puede actualizarse mediante el proceso manual interno descripto debajo.
+Este flujo demuestra control del email y posesion del codigo temporal, y crea una relacion tecnica `AdultProfileLink`. No demuestra parentesco, tutela ni representacion legal. Con la configuracion segura por defecto, cada vinculacion nueva crea una `RepresentativeVerification` en estado `PENDING`, que puede actualizarse mediante el proceso manual interno descripto debajo.
 
 ## Verificacion manual y consentimiento de monitoreo
 
@@ -272,6 +272,16 @@ python -m scripts.set_representative_verification <adult_id> <profile_id> REJECT
 ```
 
 `verified_by` es un identificador operativo provisional hasta que exista identidad administrativa. La revision manual registra resultado y observacion minima; esta etapa no almacena copias de DNI, pasaporte, partidas, fotografias ni otros documentos.
+
+Para simplificar exclusivamente pruebas y demostraciones del MVP puede habilitarse:
+
+```text
+AUTO_APPROVE_REPRESENTATIVE_VERIFICATION=true
+```
+
+El valor por defecto es `false`. Cuando esta habilitado, solamente un claim exitoso de `POST /adult/profile-links/claim` promueve una verificacion inexistente o `PENDING` a `APPROVED`, con `verified_by=automatic-mvp` y su AuditEvent. Una verificacion `APPROVED` no se duplica y una `REJECTED` nunca se sobrescribe automaticamente. OTP, login, generacion de codigos y `DEVICE_LINK` no disparan esta transicion.
+
+La autoaprobacion no crea Consent ni modifica sus reglas: el adulto debe aceptar explicitamente el aviso de privacidad despues de vincularse. Esta opcion no constituye una verificacion real de representacion legal. Antes de produccion debe configurarse `AUTO_APPROVE_REPRESENTATIVE_VERIFICATION=false` y utilizarse un mecanismo real o manual de verificacion.
 
 Para aceptar `POST /usage` debe existir al menos un adulto del Profile con vinculo activo, verificacion `APPROVED` y consentimiento `ACTIVE` para `USAGE_MONITORING`. No se exige que todos los adultos vinculados consientan. Un vinculo revocado o una verificacion que luego pasa a `REJECTED` deja de contar aunque el Consent permanezca `ACTIVE`.
 

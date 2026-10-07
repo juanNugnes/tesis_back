@@ -12,7 +12,6 @@ from app.repositories.adult_profile_link_repository import AdultProfileLinkRepos
 from app.repositories.device_repository import DeviceRepository
 from app.repositories.profile_link_code_repository import ProfileLinkCodeRepository
 from app.repositories.profile_repository import ProfileRepository
-from app.repositories.representative_verification_repository import RepresentativeVerificationRepository
 from app.schemas.device import DeviceCreate
 from app.schemas.profile_link import (
     AdultProfileLinkClaimRequest,
@@ -26,6 +25,7 @@ from app.services.device_service import (
     InactiveProfileError,
     is_installation_id_conflict,
 )
+from app.services.representative_verification_service import RepresentativeVerificationService
 
 DEVICE_LINK_PURPOSE = "DEVICE_LINK"
 ADULT_PROFILE_LINK_PURPOSE = "ADULT_PROFILE_LINK"
@@ -70,6 +70,7 @@ class ProfileLinkService:
         hash_secret: str,
         ttl_minutes: int = 10,
         code_generator: Callable[[], str] = generate_numeric_code,
+        auto_approve_representative_verification: bool = False,
     ):
         self.db = db
         self.hash_secret = hash_secret.encode("utf-8")
@@ -79,7 +80,10 @@ class ProfileLinkService:
         self.profiles = ProfileRepository(db)
         self.devices = DeviceRepository(db)
         self.adult_links = AdultProfileLinkRepository(db)
-        self.verifications = RepresentativeVerificationRepository(db)
+        self.representative_verifications = RepresentativeVerificationService(db)
+        self.auto_approve_representative_verification = (
+            auto_approve_representative_verification
+        )
         self.device_service = DeviceService(db, self.devices)
 
     def hash_code(self, code: str) -> str:
@@ -212,10 +216,6 @@ class ProfileLinkService:
             elif not adult_link.active or adult_link.revoked_at is not None:
                 raise RevokedAdultProfileLinkError
 
-            verification = await self.verifications.get_by_adult_profile(adult.id, profile.id)
-            if verification is None:
-                await self.verifications.create_pending(adult.id, profile.id)
-
             consumed = await self.link_codes.mark_used_if_valid(
                 link_code.id,  # type: ignore[union-attr]
                 ADULT_PROFILE_LINK_PURPOSE,
@@ -223,6 +223,19 @@ class ProfileLinkService:
             )
             if not consumed:
                 raise InvalidLinkCodeError
+
+            if self.auto_approve_representative_verification:
+                await self.representative_verifications.approve_automatically(
+                    adult.id,
+                    profile.id,
+                    commit=False,
+                )
+            else:
+                await self.representative_verifications.ensure_pending(
+                    adult.id,
+                    profile.id,
+                    commit=False,
+                )
 
             await self.db.commit()
             return adult_link, profile

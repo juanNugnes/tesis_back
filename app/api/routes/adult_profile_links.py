@@ -26,6 +26,9 @@ def link_service(db: AsyncSession) -> ProfileLinkService:
         db,
         settings.device_link_code_hash_secret.get_secret_value(),
         settings.device_link_code_ttl_minutes,
+        auto_approve_representative_verification=(
+            settings.auto_approve_representative_verification
+        ),
     )
 
 
