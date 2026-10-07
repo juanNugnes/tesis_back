@@ -63,6 +63,8 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `POST /api/v1/profiles/{profile_id}/consents`
 - `GET /api/v1/profiles/{profile_id}/consents/current`
 - `POST /api/v1/profiles/{profile_id}/consents/{consent_id}/revoke`
+- `POST /api/v1/profiles/{profile_id}/experimental-pmum/responses`
+- `GET /api/v1/profiles/{profile_id}/experimental-pmum/latest`
 - `GET /api/v1/profiles/{profile_id}/settings`
 - `PUT /api/v1/profiles/{profile_id}/settings`
 - `GET /api/v1/profiles/{profile_id}/activity-preferences`
@@ -290,6 +292,43 @@ La revocacion se aplica al momento de recepcion: el mismo Device JWT recibe `403
 Los cambios `APPROVED`, `REJECTED`, `CONSENT_GRANTED` y `CONSENT_REVOKED` generan `AuditEvent` con actor, Profile, resultado y metadata minima. El audit no guarda OTP, JWT, codigos temporales, documentos ni payloads de Usage, y no se usa como fuente de verdad para autorizar.
 
 El email/OTP, `ADULT_PROFILE_LINK` y estos controles no prueban por si solos representacion legal. `RepresentativeVerification` representa un proceso manual MVP. Estos controles implementan requisitos tecnicos del MVP y no constituyen por si solos una evaluacion de cumplimiento legal integral.
+
+## PMUM-SF experimental
+
+La integracion PMUM-SF experimental es un flujo Adult-only separado de Usage, del historico y del Analysis existente. No usa metricas Android ni las once variables del modelo anterior. Un adulto con `AdultProfileLink` activo crea una revision parental inmutable mediante:
+
+```http
+POST /api/v1/profiles/{profile_id}/experimental-pmum/responses
+Authorization: Bearer <adult JWT>
+Content-Type: application/json
+
+{
+  "sex_code": 1,
+  "weekday_category": 2,
+  "weekend_category": 3,
+  "respondent": "parent_or_caregiver",
+  "reference_days": 30
+}
+```
+
+`adult_id` se obtiene exclusivamente del JWT. `age` se copia del Profile bajo el lock que asigna la revision y ambos valores quedan persistidos como snapshot. `sex_code`, `weekday_category` y `weekend_category` admiten `null`; no se infieren desde Profile ni desde Usage. `reference_days` debe enviarse explicitamente.
+
+Cada envio crea una fila nueva con `revision` incremental por Profile. La revision se confirma antes de invocar Python, por lo que una caida externa no elimina la respuesta parental. El backend envia al modelo unicamente `age`, `sex_code`, `weekday_category`, `weekend_category`, `respondent` y `reference_days`; no envia UUID, email, alias, Device, JWT ni otra identidad.
+
+El cliente llama `POST /experimental/pmum-estimate` usando:
+
+```text
+EXPERIMENTAL_PMUM_SERVICE_URL=http://127.0.0.1:8765
+EXPERIMENTAL_PMUM_SERVICE_TIMEOUT_SECONDS=5
+```
+
+En Docker, una instancia que corre en el host necesita una URL alcanzable desde el contenedor, por ejemplo `http://host.docker.internal:8765`. No hay retries agresivos ni autenticacion del prototipo local.
+
+Los resultados persistidos distinguen `estimated`, `unavailable` y `technical_error`. `unavailable` es una abstencion valida y responde normalmente con score nulo. Timeout, conexion, HTTP no exitoso o payload invalido producen un resultado tecnico acotado, tambien con score nulo. `GET /experimental-pmum/latest` devuelve la ultima revision y su estimacion asociada.
+
+`estimated_pmum_sf_mean` es un valor experimental crudo en escala 1-5. No se convierte en riesgo, alerta, diagnostico, severidad, recomendacion o bloqueo, y no esta aprobado para mostrarse a familias.
+
+Permanecen pendientes el texto definitivo de las preguntas, los huecos de categorias horarias originales, el mapping de sexo de Modera a codigos 1/2, la validacion con poblacion argentina, la aprobacion para mostrar resultados a familias, el deploy final del servicio y la distribucion segura del `.joblib`. No se inventan reglas para estos contratos todavia abiertos.
 
 ## Cambios requeridos en Android
 

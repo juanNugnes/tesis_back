@@ -7,6 +7,12 @@ from app.schemas.adult_auth import (
     AdultRead,
 )
 from app.schemas.device import DeviceCreate, DeviceRead, DeviceRegistrationRead
+from app.schemas.experimental_pmum import (
+    ExperimentalPmumEstimateRead,
+    ExperimentalPmumReviewRead,
+    ParentalScreenTimeResponseCreate,
+    ParentalScreenTimeResponseRead,
+)
 from app.schemas.consent import ConsentGrantRequest, ConsentRead, RepresentativeVerificationRead
 from app.schemas.profile import ProfileBootstrapRead, ProfileCreate, ProfileRead, ProfileUpdate
 from app.schemas.profile_link import (
@@ -28,6 +34,10 @@ __all__ = [
     "DeviceCreate",
     "DeviceRead",
     "DeviceRegistrationRead",
+    "ParentalScreenTimeResponseCreate",
+    "ParentalScreenTimeResponseRead",
+    "ExperimentalPmumEstimateRead",
+    "ExperimentalPmumReviewRead",
     "ConsentGrantRequest",
     "ConsentRead",
     "RepresentativeVerificationRead",

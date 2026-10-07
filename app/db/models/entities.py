@@ -110,6 +110,16 @@ class AuditResult(str, enum.Enum):
     SUCCESS = "SUCCESS"
 
 
+class ParentalRespondent(str, enum.Enum):
+    PARENT_OR_CAREGIVER = "parent_or_caregiver"
+
+
+class ExperimentalPmumEstimateStatus(str, enum.Enum):
+    ESTIMATED = "estimated"
+    UNAVAILABLE = "unavailable"
+    TECHNICAL_ERROR = "technical_error"
+
+
 class Profile(Base):
     __tablename__ = "profiles"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -134,6 +144,10 @@ class Profile(Base):
         cascade="all, delete-orphan",
     )
     adult_links: Mapped[list["AdultProfileLink"]] = relationship(back_populates="profile", cascade="all, delete-orphan")
+    parental_screen_time_responses: Mapped[list["ParentalScreenTimeResponse"]] = relationship(
+        back_populates="profile",
+        cascade="all, delete-orphan",
+    )
 
 
 class ProfileSettings(Base):
@@ -192,6 +206,10 @@ class AdultAccount(Base):
         cascade="all, delete-orphan",
     )
     otp_challenges: Mapped[list["AdultOtpChallenge"]] = relationship(
+        back_populates="adult",
+        cascade="all, delete-orphan",
+    )
+    parental_screen_time_responses: Mapped[list["ParentalScreenTimeResponse"]] = relationship(
         back_populates="adult",
         cascade="all, delete-orphan",
     )
@@ -295,6 +313,59 @@ class AuditEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     result: Mapped[AuditResult] = mapped_column(Enum(AuditResult, name="audit_result"))
     event_metadata: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
+
+
+class ParentalScreenTimeResponse(Base):
+    __tablename__ = "parental_screen_time_responses"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id",
+            "revision",
+            name="uq_parental_screen_time_responses_profile_revision",
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"))
+    adult_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("adult_accounts.id", ondelete="CASCADE"))
+    revision: Mapped[int] = mapped_column(Integer)
+    age: Mapped[int] = mapped_column(Integer)
+    sex_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weekday_category: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weekend_category: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    respondent: Mapped[ParentalRespondent] = mapped_column(
+        Enum(ParentalRespondent, name="parental_respondent"),
+    )
+    reference_days: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    profile: Mapped[Profile] = relationship(back_populates="parental_screen_time_responses")
+    adult: Mapped[AdultAccount] = relationship(back_populates="parental_screen_time_responses")
+    estimates: Mapped[list["ExperimentalPmumEstimate"]] = relationship(
+        back_populates="parental_response",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class ExperimentalPmumEstimate(Base):
+    __tablename__ = "experimental_pmum_estimates"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    parental_response_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("parental_screen_time_responses.id", ondelete="CASCADE"),
+        index=True,
+    )
+    status: Mapped[ExperimentalPmumEstimateStatus] = mapped_column(
+        Enum(ExperimentalPmumEstimateStatus, name="experimental_pmum_estimate_status"),
+    )
+    estimated_pmum_sf_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    estimated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    technical_error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    technical_error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    parental_response: Mapped[ParentalScreenTimeResponse] = relationship(
+        back_populates="estimates",
+    )
 
 
 class AdultOtpChallenge(Base):

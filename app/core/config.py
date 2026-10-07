@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     device_auth_jwt_secret: SecretStr | None = None
     device_auth_jwt_exp_minutes: int = Field(default=43_200, gt=0)
     device_bootstrap_ttl_minutes: int = Field(default=10, gt=0)
+    experimental_pmum_service_url: str = "http://127.0.0.1:8765"
+    experimental_pmum_service_timeout_seconds: float = Field(default=5.0, gt=0)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
