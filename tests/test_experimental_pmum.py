@@ -220,7 +220,7 @@ async def test_revisions_are_immutable_age_snapshots_and_latest_returns_revision
 
 
 @pytest.mark.asyncio
-async def test_unavailable_is_valid_and_persists_nullable_declared_answers(
+async def test_null_sex_persists_unavailable_revision_without_calling_pmum(
     client,
     db_session,
     adult_session,
@@ -228,6 +228,43 @@ async def test_unavailable_is_valid_and_persists_nullable_declared_answers(
 ):
     profile, _ = await create_profile_and_device(client)
     headers, _ = await adult_session(profile["id"], email="pmum-unavailable@example.com")
+
+    response = await client.post(
+        f"/api/v1/profiles/{profile['id']}/experimental-pmum/responses",
+        headers=headers,
+        json=response_payload(sex_code=None),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["estimate"]["status"] == "unavailable"
+    assert body["estimate"]["estimated_pmum_sf_mean"] is None
+    assert body["estimate"]["model_version"] is None
+    assert body["estimate"]["technical_error_code"] is None
+    assert body["estimate"]["technical_error_message"] is None
+    assert body["response"]["sex_code"] is None
+    assert body["response"]["weekday_category"] == 2
+    assert body["response"]["weekend_category"] == 3
+    assert fake_pmum_client.calls == []
+    assert await db_session.scalar(
+        select(func.count()).select_from(ParentalScreenTimeResponse)
+    ) == 1
+    assert await db_session.scalar(
+        select(func.count()).select_from(ExperimentalPmumEstimate)
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_parent_answer_unavailable_still_calls_pmum(
+    client,
+    adult_session,
+    fake_pmum_client,
+):
+    profile, _ = await create_profile_and_device(client)
+    headers, _ = await adult_session(
+        profile["id"],
+        email="pmum-missing-answer@example.com",
+    )
     fake_pmum_client.result = ExperimentalPmumResult(
         status=ExperimentalPmumEstimateStatus.UNAVAILABLE,
         model_version="hu_pmum_sf_experimental_v1",
@@ -236,22 +273,21 @@ async def test_unavailable_is_valid_and_persists_nullable_declared_answers(
     response = await client.post(
         f"/api/v1/profiles/{profile['id']}/experimental-pmum/responses",
         headers=headers,
-        json=response_payload(
-            sex_code=None,
-            weekday_category=None,
-            weekend_category=None,
-        ),
+        json=response_payload(weekday_category=None),
     )
 
     assert response.status_code == 201
-    body = response.json()
-    assert body["estimate"]["status"] == "unavailable"
-    assert body["estimate"]["estimated_pmum_sf_mean"] is None
-    assert body["estimate"]["technical_error_code"] is None
-    assert body["response"]["sex_code"] is None
-    assert await db_session.scalar(
-        select(func.count()).select_from(ParentalScreenTimeResponse)
-    ) == 1
+    assert response.json()["estimate"]["status"] == "unavailable"
+    assert fake_pmum_client.calls == [
+        {
+            "age": 9,
+            "sex_code": 1,
+            "weekday_category": None,
+            "weekend_category": 3,
+            "respondent": "parent_or_caregiver",
+            "reference_days": 30,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -286,6 +322,47 @@ async def test_technical_errors_are_persisted_without_losing_parental_revision(
     assert response.json()["estimate"]["status"] == "technical_error"
     assert response.json()["estimate"]["technical_error_code"] == error_code
     assert response.json()["estimate"]["estimated_pmum_sf_mean"] is None
+    assert await db_session.scalar(
+        select(func.count()).select_from(ParentalScreenTimeResponse)
+    ) == 1
+    assert await db_session.scalar(
+        select(func.count()).select_from(ExperimentalPmumEstimate)
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_complete_data_connection_failure_persists_technical_error(
+    client,
+    db_session,
+    adult_session,
+):
+    profile, _ = await create_profile_and_device(client)
+    headers, _ = await adult_session(
+        profile["id"],
+        email="pmum-connection-failure@example.com",
+    )
+
+    async def connection_failure(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    failing_client = ExperimentalPmumClient(
+        "http://pmum.test",
+        1,
+        transport=httpx.MockTransport(connection_failure),
+    )
+    app.dependency_overrides[get_experimental_pmum_client] = lambda: failing_client
+    try:
+        response = await client.post(
+            f"/api/v1/profiles/{profile['id']}/experimental-pmum/responses",
+            headers=headers,
+            json=response_payload(),
+        )
+    finally:
+        app.dependency_overrides.pop(get_experimental_pmum_client, None)
+
+    assert response.status_code == 201
+    assert response.json()["estimate"]["status"] == "technical_error"
+    assert response.json()["estimate"]["technical_error_code"] == "CONNECTION_ERROR"
     assert await db_session.scalar(
         select(func.count()).select_from(ParentalScreenTimeResponse)
     ) == 1
@@ -340,9 +417,9 @@ async def test_http_client_classifies_technical_failures(scenario, expected_code
     result = await client.estimate(
         ExperimentalPmumRequest(
             age=9,
-            sex_code=None,
-            weekday_category=None,
-            weekend_category=None,
+            sex_code=1,
+            weekday_category=2,
+            weekend_category=3,
             respondent=ParentalRespondent.PARENT_OR_CAREGIVER,
             reference_days=30,
         )

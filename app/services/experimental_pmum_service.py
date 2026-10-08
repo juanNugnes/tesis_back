@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from app.db.models import (
     AdultAccount,
     ExperimentalPmumEstimate,
+    ExperimentalPmumEstimateStatus,
     ParentalScreenTimeResponse,
     Profile,
 )
@@ -11,6 +12,7 @@ from app.schemas.experimental_pmum import ParentalScreenTimeResponseCreate
 from app.services.experimental_pmum_client import (
     ExperimentalPmumClient,
     ExperimentalPmumRequest,
+    ExperimentalPmumResult,
 )
 
 
@@ -40,15 +42,20 @@ class ExperimentalPmumService:
         data: ParentalScreenTimeResponseCreate,
     ) -> ExperimentalPmumReview:
         response = await self.repository.create_response(profile, adult, data)
-        model_request = ExperimentalPmumRequest(
-            age=response.age,
-            sex_code=response.sex_code,
-            weekday_category=response.weekday_category,
-            weekend_category=response.weekend_category,
-            respondent=response.respondent,
-            reference_days=response.reference_days,
-        )
-        result = await self.client.estimate(model_request)
+        if response.sex_code is None:
+            result = ExperimentalPmumResult(
+                status=ExperimentalPmumEstimateStatus.UNAVAILABLE,
+            )
+        else:
+            model_request = ExperimentalPmumRequest(
+                age=response.age,
+                sex_code=response.sex_code,
+                weekday_category=response.weekday_category,
+                weekend_category=response.weekend_category,
+                respondent=response.respondent,
+                reference_days=response.reference_days,
+            )
+            result = await self.client.estimate(model_request)
         estimate = await self.repository.create_estimate(response.id, result)
         return ExperimentalPmumReview(response=response, estimate=estimate)
 
