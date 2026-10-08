@@ -318,7 +318,7 @@ Cada envio crea una fila nueva con `revision` incremental por Profile. La revisi
 El cliente llama `POST /experimental/pmum-estimate` usando:
 
 ```text
-EXPERIMENTAL_PMUM_SERVICE_URL=http://127.0.0.1:8765
+EXPERIMENTAL_PMUM_SERVICE_URL=http://host.docker.internal:8765
 EXPERIMENTAL_PMUM_SERVICE_TIMEOUT_SECONDS=5
 ```
 
