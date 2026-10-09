@@ -69,6 +69,7 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `PUT /api/v1/profiles/{profile_id}/settings`
 - `GET /api/v1/profiles/{profile_id}/activity-preferences`
 - `PUT /api/v1/profiles/{profile_id}/activity-preferences`
+- `POST /api/v1/profiles/{profile_id}/activity-suggestions`
 - `POST /api/v1/profiles/{profile_id}/contexts`
 - `GET /api/v1/profiles/{profile_id}/contexts`
 - `GET /api/v1/profiles/{profile_id}/contexts/active`
@@ -128,6 +129,13 @@ Tipos de adaptacion: `NONE`, `TEMPORARY`, `PERMANENT`.
 Consideraciones admitidas: `MOBILITY`, `VISION`, `HEARING`, `ATTENTION_CONCENTRATION`, `ARMS_HANDS`, `LEGS`, `COMMUNICATION`, `SENSORY_SENSITIVITY`, `TEMPORARY_PHYSICAL_DISCOMFORT`, `OTHER`.
 
 Caracteristicas a evitar: `RUNNING`, `JUMPING`, `PROLONGED_STANDING`, `ARMS_HANDS_USE`, `VISUAL_PRECISION`, `LOUD_SOUNDS`, `HIGH_STIMULATION`, `PROLONGED_CONCENTRATION`.
+
+El endpoint de sugerencias acepta los contextos `voluntary` y `bedtime`, requiere
+un `DeviceBearer` perteneciente al Profile y obtiene las preferencias persistidas
+del backend. La boundary `ActivitySelectorGateway` esta preparada, pero el repo
+analitico todavia no expone un transporte HTTP para `recommend_activities`; hasta
+que exista ese adapter, el endpoint devuelve una falla tecnica `503` en lugar de
+simular actividades o confundir indisponibilidad con una lista vacia.
 
 Ejemplo con intereses solamente:
 
@@ -212,7 +220,7 @@ Clasificacion actual de acceso:
 | Clase | Endpoints | Estado |
 |---|---|---|
 | Adult-only | `GET /usage`, `GET /usage/{day}`, todos los `/analysis`, generar `/device-link-codes`, Context CRUD, `/auth/adult/me`, `/adult/profiles` | `AdultBearer` + link activo cuando hay `profile_id` |
-| Device-only | `POST /usage`, generar `/adult-link-codes` | `DeviceBearer` + `Device.profile_id` coincidente; Usage ademas requiere autorizacion de monitoreo vigente |
+| Device-only | `POST /usage`, generar `/adult-link-codes`, `POST /activity-suggestions` | `DeviceBearer` + `Device.profile_id` coincidente; Usage ademas requiere autorizacion de monitoreo vigente |
 | Adult-or-Device | Profile GET/PUT, Settings GET/PUT y ActivityPreferences GET/PUT | JWT con type explicito y autorizacion consultada en DB |
 | Bootstrap | `POST /profiles`, registrar primer Device y `POST /device-links/claim` | Profile creation publica; registro con `DeviceBootstrapBearer`; claim con codigo temporal |
 | Public | OTP request/verify y `/health` | Sin principal previo |
