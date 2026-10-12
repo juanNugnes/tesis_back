@@ -10,7 +10,10 @@ from app.api.routes.profile_activity_suggestions import (
 from app.core.security import DeviceAccessTokenCodec
 from app.db.models import ActivityOffer, ActivityOfferItem, ActivitySelection, Device
 from app.main import app
-from app.services.activity_selector_gateway import SelectorActivity
+from app.services.activity_selector_gateway import (
+    ActivitySelectorResult,
+    SelectorActivity,
+)
 
 TEST_DEVICE_SECRET = "test-only-device-auth-secret-at-least-32-characters"
 
@@ -49,7 +52,7 @@ class FakeActivitySelectorGateway:
         eligibility,
         n=3,
     ):
-        return self.activities
+        return ActivitySelectorResult(activities=tuple(self.activities))
 
 
 @pytest.fixture
@@ -325,6 +328,7 @@ async def test_empty_suggestions_do_not_create_an_offer(
         "offer_id": None,
         "context": "voluntary",
         "activities": [],
+        "reason": None,
     }
     assert await db_session.scalar(select(func.count()).select_from(ActivityOffer)) == 0
 

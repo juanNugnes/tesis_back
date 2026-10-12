@@ -32,3 +32,4 @@ class ActivitySuggestionsRead(BaseModel):
     offer_id: uuid.UUID | None
     context: ActivitySuggestionContext
     activities: list[ActivitySuggestionRead] = Field(max_length=3)
+    reason: str | None = None

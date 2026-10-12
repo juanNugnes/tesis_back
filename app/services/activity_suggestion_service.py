@@ -40,7 +40,7 @@ class ActivitySuggestionService:
 
         mapped_interests = ActivityInterestMapper.map(preferences.interests)
         mapped_eligibility = ActivityEligibilityMapper.map(preferences)
-        activities = await self.selector.recommend(
+        selector_result = await self.selector.recommend(
             context=context.value,
             interests=mapped_interests.selector_tags,
             eligibility_state=mapped_eligibility.eligibility_state,
@@ -49,7 +49,7 @@ class ActivitySuggestionService:
         )
         response_activities = [
             ActivitySuggestionRead.model_validate(activity)
-            for activity in list(activities)[:3]
+            for activity in selector_result.activities[:3]
         ]
         offer = None
         if response_activities:
@@ -63,4 +63,5 @@ class ActivitySuggestionService:
             offer_id=offer.id if offer is not None else None,
             context=context,
             activities=response_activities,
+            reason=selector_result.reason,
         )

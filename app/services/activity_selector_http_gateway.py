@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.services.activity_selector_gateway import (
     ActivityEligibility,
+    ActivitySelectorResult,
     ActivitySelectorTechnicalError,
     SelectorActivity,
 )
@@ -77,8 +78,6 @@ class _ActivitySelectorResponse(BaseModel):
         elif self.status == "no_eligible_activities":
             if self.selection_fingerprint is None:
                 raise ValueError("selection responses require a fingerprint")
-        elif self.reason != "eligibility_unknown":
-            raise ValueError("unavailable responses require eligibility_unknown")
         return self
 
 
@@ -104,7 +103,7 @@ class HttpActivitySelectorGateway:
         eligibility_state: Literal["known", "unknown"],
         eligibility: ActivityEligibility | None,
         n: int = 3,
-    ) -> list[SelectorActivity]:
+    ) -> ActivitySelectorResult:
         if n != 3:
             raise ActivitySelectorTechnicalError(
                 "SELECTOR_REQUEST_ERROR",
@@ -173,20 +172,21 @@ class HttpActivitySelectorGateway:
                 "Analytics activity selector returned a mismatched request id",
             )
 
-        if payload.status == "unavailable":
-            return []
-        return [
-            SelectorActivity(
-                activity_id=activity.activity_id,
-                title=activity.title,
-                description=activity.description,
-                category=activity.category,
-                activity_level=activity.activity_level,
-                bedtime_suitable=activity.bedtime_suitable,
-                requires_other_person=activity.requires_other_person,
-                may_require_device_interaction=(
-                    activity.may_require_device_interaction
-                ),
-            )
-            for activity in payload.activities
-        ]
+        return ActivitySelectorResult(
+            activities=tuple(
+                SelectorActivity(
+                    activity_id=activity.activity_id,
+                    title=activity.title,
+                    description=activity.description,
+                    category=activity.category,
+                    activity_level=activity.activity_level,
+                    bedtime_suitable=activity.bedtime_suitable,
+                    requires_other_person=activity.requires_other_person,
+                    may_require_device_interaction=(
+                        activity.may_require_device_interaction
+                    ),
+                )
+                for activity in payload.activities
+            ),
+            reason=payload.reason,
+        )

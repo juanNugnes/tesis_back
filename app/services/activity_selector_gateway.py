@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, Protocol, Sequence
+from typing import Literal, Protocol
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,12 @@ class SelectorActivity:
     may_require_device_interaction: bool
 
 
+@dataclass(frozen=True)
+class ActivitySelectorResult:
+    activities: tuple[SelectorActivity, ...]
+    reason: str | None = None
+
+
 class ActivitySelectorTechnicalError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -43,4 +49,4 @@ class ActivitySelectorGateway(Protocol):
         eligibility_state: Literal["known", "unknown"],
         eligibility: ActivityEligibility | None,
         n: int = 3,
-    ) -> Sequence[SelectorActivity]: ...
+    ) -> ActivitySelectorResult: ...

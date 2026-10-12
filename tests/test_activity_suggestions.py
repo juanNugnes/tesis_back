@@ -16,6 +16,7 @@ from app.main import app
 from app.schemas.profile_activity_preferences import ProfileActivityPreferencesRead
 from app.services.activity_selector_gateway import (
     ActivityEligibility,
+    ActivitySelectorResult,
     ActivitySelectorTechnicalError,
     SelectorActivity,
 )
@@ -29,6 +30,7 @@ from app.services.activity_selector_mapper import (
 class FakeActivitySelectorGateway:
     def __init__(self):
         self.activities = []
+        self.reason = None
         self.error = None
         self.calls = []
 
@@ -52,7 +54,10 @@ class FakeActivitySelectorGateway:
         )
         if self.error is not None:
             raise self.error
-        return self.activities
+        return ActivitySelectorResult(
+            activities=tuple(self.activities),
+            reason=self.reason,
+        )
 
 
 @pytest.fixture
@@ -107,6 +112,7 @@ def analytics_selection_response(request_payload, activities):
     status = "selected" if activities else "no_eligible_activities"
     return {
         "status": status,
+        "reason": None if activities else "no_eligible_activities",
         "request_id": request_payload["request_id"],
         "selection_fingerprint": "selection-fingerprint",
         "catalog_version": "provisional-sha256:catalog",
@@ -324,6 +330,7 @@ async def test_selector_cardinality_is_returned_as_a_valid_response(
 
     assert response.status_code == 200
     assert len(response.json()["activities"]) == activity_count
+    assert response.json()["reason"] is None
     if activity_count:
         assert set(response.json()["activities"][0]) == {
             "activity_id",
@@ -477,11 +484,19 @@ async def test_activity_suggestions_require_own_device(
 
 
 def test_activity_suggestions_openapi_contract_is_device_only():
-    operation = app.openapi()["paths"][
+    openapi = app.openapi()
+    operation = openapi["paths"][
         "/api/v1/profiles/{profile_id}/activity-suggestions"
     ]["post"]
 
     assert operation["security"] == [{"DeviceBearer": []}]
+    response_schema = openapi["components"]["schemas"]["ActivitySuggestionsRead"]
+    reason_schema = response_schema["properties"]["reason"]
+    assert {item.get("type") for item in reason_schema["anyOf"]} == {
+        "string",
+        "null",
+    }
+    assert "reason" not in response_schema.get("required", [])
 
 
 @pytest.mark.asyncio
@@ -517,7 +532,8 @@ async def test_http_gateway_sends_exact_payload_and_accepts_valid_cardinalities(
         n=3,
     )
 
-    assert len(result) == activity_count
+    assert len(result.activities) == activity_count
+    assert result.reason == (None if activities else "no_eligible_activities")
     request_id = captured["payload"].pop("request_id")
     assert request_id.startswith("modera-")
     assert captured["payload"] == {
@@ -566,14 +582,48 @@ async def test_http_gateway_unknown_eligibility_omits_filters_and_accepts_unavai
         eligibility=None,
     )
 
-    assert result == []
+    assert result.activities == ()
+    assert result.reason == "eligibility_unknown"
     assert captured["eligibility_state"] == "unknown"
     assert "eligibility" not in captured
 
 
 @pytest.mark.asyncio
-async def test_analytics_unavailable_is_a_successful_empty_backend_response(client):
-    profile, headers = await create_profile_and_device(client, "Analytics unavailable")
+@pytest.mark.parametrize(
+    ("analytics_status", "analytics_reason", "activity_count"),
+    [
+        pytest.param(
+            "unavailable",
+            "eligibility_unknown",
+            0,
+            id="eligibility-unknown",
+        ),
+        pytest.param(
+            "no_eligible_activities",
+            "no_eligible_activities",
+            0,
+            id="no-eligible-activities",
+        ),
+        pytest.param("selected", None, 1, id="selected"),
+        pytest.param(
+            "unavailable",
+            "future_functional_reason",
+            0,
+            id="unknown-reason",
+        ),
+    ],
+)
+async def test_analytics_reason_is_propagated_to_successful_backend_response(
+    client,
+    analytics_status,
+    analytics_reason,
+    activity_count,
+):
+    profile, headers = await create_profile_and_device(
+        client,
+        f"Analytics {analytics_status}",
+    )
+    activities = [selector_activity(index) for index in range(activity_count)]
 
     async def handler(request):
         request_payload = json.loads(request.content)
@@ -581,13 +631,20 @@ async def test_analytics_unavailable_is_a_successful_empty_backend_response(clie
             200,
             request=request,
             json={
-                "status": "unavailable",
-                "reason": "eligibility_unknown",
+                "status": analytics_status,
+                "reason": analytics_reason,
                 "request_id": request_payload["request_id"],
+                "selection_fingerprint": (
+                    "selection-fingerprint"
+                    if analytics_status != "unavailable"
+                    else None
+                ),
                 "catalog_version": "provisional-sha256:catalog",
                 "catalog_status": "PROVISIONAL",
                 "selector_version": "published-selector-sha256:selector",
-                "activities": [],
+                "activities": [
+                    analytics_activity(activity) for activity in activities
+                ],
             },
         )
 
@@ -608,11 +665,10 @@ async def test_analytics_unavailable_is_a_successful_empty_backend_response(clie
         app.dependency_overrides.pop(get_activity_selector_gateway, None)
 
     assert response.status_code == 200
-    assert response.json() == {
-        "offer_id": None,
-        "context": "voluntary",
-        "activities": [],
-    }
+    body = response.json()
+    assert body["reason"] == analytics_reason
+    assert len(body["activities"]) == activity_count
+    assert (body["offer_id"] is not None) is (activity_count > 0)
 
 
 @pytest.mark.asyncio
