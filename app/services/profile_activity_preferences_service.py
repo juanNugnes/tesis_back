@@ -1,6 +1,6 @@
 import uuid
 
-from app.db.models import AdaptationType, ProfileActivityPreferences
+from app.db.models import ProfileActivityPreferences
 from app.repositories.profile_activity_preferences_repository import ProfileActivityPreferencesRepository
 from app.schemas.profile_activity_preferences import (
     ProfileActivityPreferencesRead,
@@ -22,13 +22,16 @@ class ProfileActivityPreferencesService:
         self,
         profile_id: uuid.UUID,
         data: ProfileActivityPreferencesUpdate,
-    ) -> ProfileActivityPreferences:
+    ) -> ProfileActivityPreferencesRead:
         preferences = await self.repository.get(profile_id)
         values = data.model_dump(exclude_unset=preferences is not None)
-        current_adaptation = values.get(
-            "adaptation_type",
-            preferences.adaptation_type if preferences is not None else AdaptationType.NONE,
+        considerations = values.pop("considerations", None)
+        if values.get("considerations_answered") is False:
+            considerations = []
+        stored = await self.repository.upsert(
+            profile_id,
+            values,
+            preferences,
+            considerations,
         )
-        if AdaptationType(current_adaptation) == AdaptationType.NONE:
-            values["valid_until"] = None
-        return await self.repository.upsert(profile_id, values, preferences)
+        return ProfileActivityPreferencesRead.model_validate(stored)

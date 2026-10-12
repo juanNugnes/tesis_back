@@ -16,7 +16,9 @@ services:
     build: .
     env_file: .env
     environment:
-      EXPERIMENTAL_PMUM_SERVICE_URL: ${EXPERIMENTAL_PMUM_SERVICE_URL:-http://host.docker.internal:8765}
+      ANALYTICS_SERVICE_URL: ${ANALYTICS_SERVICE_URL:-http://analytics:8765}
+      ANALYTICS_SERVICE_TOKEN: ${ANALYTICS_SERVICE_TOKEN:-}
+      ANALYTICS_TIMEOUT_SECONDS: ${ANALYTICS_TIMEOUT_SECONDS:-5}
     ports:
       - "8000:8000"
     depends_on:

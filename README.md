@@ -70,6 +70,7 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `GET /api/v1/profiles/{profile_id}/activity-preferences`
 - `PUT /api/v1/profiles/{profile_id}/activity-preferences`
 - `POST /api/v1/profiles/{profile_id}/activity-suggestions`
+- `POST /api/v1/profiles/{profile_id}/activity-selections`
 - `POST /api/v1/profiles/{profile_id}/contexts`
 - `GET /api/v1/profiles/{profile_id}/contexts`
 - `GET /api/v1/profiles/{profile_id}/contexts/active`
@@ -124,18 +125,41 @@ Cada perfil puede tener un recurso actual de preferencias. `PUT /api/v1/profiles
 
 Intereses admitidos: `DRAWING_CREATING`, `READING_STORIES`, `MUSIC`, `GAMES_CHALLENGES`, `OUTDOORS`, `MOVEMENT`, `BUILDING`, `WRITING`, `IMAGINATIVE_PLAY`.
 
-Tipos de adaptacion: `NONE`, `TEMPORARY`, `PERMANENT`.
-
-Consideraciones admitidas: `MOBILITY`, `VISION`, `HEARING`, `ATTENTION_CONCENTRATION`, `ARMS_HANDS`, `LEGS`, `COMMUNICATION`, `SENSORY_SENSITIVITY`, `TEMPORARY_PHYSICAL_DISCOMFORT`, `OTHER`.
-
 Caracteristicas a evitar: `RUNNING`, `JUMPING`, `PROLONGED_STANDING`, `ARMS_HANDS_USE`, `VISUAL_PRECISION`, `LOUD_SOUNDS`, `HIGH_STIMULATION`, `PROLONGED_CONCENTRATION`.
 
 El endpoint de sugerencias acepta los contextos `voluntary` y `bedtime`, requiere
 un `DeviceBearer` perteneciente al Profile y obtiene las preferencias persistidas
-del backend. La boundary `ActivitySelectorGateway` esta preparada, pero el repo
-analitico todavia no expone un transporte HTTP para `recommend_activities`; hasta
-que exista ese adapter, el endpoint devuelve una falla tecnica `503` en lugar de
-simular actividades o confundir indisponibilidad con una lista vacia.
+del backend. `HttpActivitySelectorGateway` consume el adapter experimental local
+del servicio interno unificado `analytics`, mediante
+`POST /v1/activities/select`. En Docker se configura con:
+
+```text
+ANALYTICS_SERVICE_URL=http://analytics:8765
+ANALYTICS_SERVICE_TOKEN=<secreto backend-a-analytics>
+ANALYTICS_TIMEOUT_SECONDS=5
+```
+
+El token de servicio es independiente de DeviceBearer y AdultBearer. Una lista
+vacia o una respuesta funcional `status=unavailable` son resultados validos;
+timeout, conexion, HTTP inesperado o respuesta invalida se devuelven como una
+falla tecnica `503`.
+El despliegue Compose que incluya analytics debe incorporarlo con el nombre de
+servicio `analytics` en la misma red interna; el backend no necesita publicar su
+puerto hacia el host.
+
+Mientras no exista un mapping aprobado, una pregunta omitida
+(`considerations_answered=false`) o una lista con consideraciones se envia como
+`eligibility_state=unknown`, sin `eligibility`. Solamente una respuesta explicita
+de "Ninguna" (`considerations_answered=true` y lista vacia) se envia como
+`eligibility_state=known` con `eligibility={}`. No se traducen consideraciones a
+exclusiones, categorias ni niveles de actividad.
+
+Cuando hay actividades, la respuesta incluye un `offer_id` y el backend guarda los
+`activity_id` en el mismo orden mostrado. Una respuesta sin actividades usa
+`offer_id: null` y no crea una oferta. El dispositivo registra la actividad elegida
+con `POST /profiles/{profile_id}/activity-selections`, enviando un `selection_id`
+UUID, el `offer_id`, el `activity_id` y `selected_at_epoch_millis`. Reenviar el mismo
+payload es idempotente; reutilizar el UUID con datos diferentes devuelve `409`.
 
 Ejemplo con intereses solamente:
 
@@ -145,33 +169,48 @@ Ejemplo con intereses solamente:
 }
 ```
 
-Ejemplo con una necesidad temporal:
+Ejemplo con consideraciones permanentes y temporales:
 
 ```json
 {
   "interests": ["BUILDING"],
-  "adaptation_type": "TEMPORARY",
-  "considerations": ["LEGS"],
+  "considerations_answered": true,
+  "considerations": [
+    {
+      "type": "VISUAL",
+      "duration_type": "PERMANENT",
+      "valid_until": null
+    },
+    {
+      "type": "LOWER_BODY_MOBILITY",
+      "duration_type": "TEMPORARY",
+      "valid_until": "2026-11-20"
+    }
+  ],
   "activities_to_avoid": ["RUNNING", "JUMPING"],
-  "additional_notes": "Por unos dias conviene evitar actividades de impacto.",
-  "valid_until": "2026-10-15"
+  "additional_notes": "Por unos dias conviene evitar actividades de impacto."
 }
 ```
 
-Ejemplo sin restricciones:
+Ejemplo de respuesta explicita sin consideraciones:
 
 ```json
 {
   "interests": ["BUILDING", "GAMES_CHALLENGES"],
-  "adaptation_type": "NONE",
+  "considerations_answered": true,
   "considerations": [],
   "activities_to_avoid": [],
-  "additional_notes": null,
-  "valid_until": null
+  "additional_notes": null
 }
 ```
 
-Las colecciones no aceptan duplicados. `additional_notes` admite hasta 500 caracteres. Al cambiar `adaptation_type` a `NONE`, el backend limpia `valid_until` y conserva las demas preferencias declaradas.
+`considerations_answered: false` representa una pregunta omitida y exige una lista
+vacia; `true` con lista vacia representa una respuesta explicita de "Ninguna".
+Los tipos admitidos son `UPPER_BODY_MOBILITY`, `LOWER_BODY_MOBILITY`, `VISUAL`,
+`AUDITORY` y `SOUND_SENSITIVITY`, sin duplicados. Cada elemento es `PERMANENT`
+con `valid_until: null` o `TEMPORARY` con una fecha no vencida obligatoria. Estas
+consideraciones todavia no alteran los filtros enviados al selector.
+`additional_notes` admite hasta 500 caracteres.
 
 ## Identidad de dispositivo y bootstrap
 
@@ -326,11 +365,13 @@ Cada envio crea una fila nueva con `revision` incremental por Profile. La revisi
 El cliente llama `POST /experimental/pmum-estimate` usando:
 
 ```text
-EXPERIMENTAL_PMUM_SERVICE_URL=http://host.docker.internal:8765
-EXPERIMENTAL_PMUM_SERVICE_TIMEOUT_SECONDS=5
+ANALYTICS_SERVICE_URL=http://analytics:8765
+ANALYTICS_SERVICE_TOKEN=<secreto backend-a-analytics>
+ANALYTICS_TIMEOUT_SECONDS=5
 ```
 
-En Docker, una instancia que corre en el host necesita una URL alcanzable desde el contenedor, por ejemplo `http://host.docker.internal:8765`. No hay retries agresivos ni autenticacion del prototipo local.
+Activities y PMUM comparten el mismo servicio, timeout y credencial Bearer. El
+token no pertenece a un adulto ni a un dispositivo y no debe hardcodearse.
 
 Los resultados persistidos distinguen `estimated`, `unavailable` y `technical_error`. `unavailable` es una abstencion valida y responde normalmente con score nulo. Timeout, conexion, HTTP no exitoso o payload invalido producen un resultado tecnico acotado, tambien con score nulo. `GET /experimental-pmum/latest` devuelve la ultima revision y su estimacion asociada.
 

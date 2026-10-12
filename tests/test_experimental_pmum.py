@@ -346,7 +346,8 @@ async def test_complete_data_connection_failure_persists_technical_error(
         raise httpx.ConnectError("connection refused", request=request)
 
     failing_client = ExperimentalPmumClient(
-        "http://pmum.test",
+        "http://analytics.test",
+        "analytics-service-token",
         1,
         transport=httpx.MockTransport(connection_failure),
     )
@@ -410,7 +411,8 @@ async def test_http_client_classifies_technical_failures(scenario, expected_code
         return httpx.Response(200, text="not-json", request=request)
 
     client = ExperimentalPmumClient(
-        "http://pmum.test",
+        "http://analytics.test",
+        "analytics-service-token",
         1,
         transport=httpx.MockTransport(handler),
     )
@@ -431,11 +433,48 @@ async def test_http_client_classifies_technical_failures(scenario, expected_code
 
 
 @pytest.mark.asyncio
+async def test_http_client_preserves_functional_unavailable_response():
+    async def handler(request):
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "status": "unavailable",
+                "reason": "missing_parent_answer",
+            },
+        )
+
+    client = ExperimentalPmumClient(
+        "http://analytics.test",
+        "analytics-service-token",
+        1,
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = await client.estimate(
+        ExperimentalPmumRequest(
+            age=9,
+            sex_code=1,
+            weekday_category=None,
+            weekend_category=3,
+            respondent=ParentalRespondent.PARENT_OR_CAREGIVER,
+            reference_days=30,
+        )
+    )
+
+    assert result.status == ExperimentalPmumEstimateStatus.UNAVAILABLE
+    assert result.technical_error_code is None
+    assert result.estimated_pmum_sf_mean is None
+
+
+@pytest.mark.asyncio
 async def test_http_client_sends_only_six_non_identifying_inputs():
-    captured = {}
+    captured = {"payload": None, "authorization": None, "content_type": None}
 
     async def handler(request):
-        captured.update(json.loads(request.content))
+        captured["payload"] = json.loads(request.content)
+        captured["authorization"] = request.headers.get("Authorization")
+        captured["content_type"] = request.headers.get("Content-Type")
         return httpx.Response(
             200,
             request=request,
@@ -447,7 +486,8 @@ async def test_http_client_sends_only_six_non_identifying_inputs():
         )
 
     client = ExperimentalPmumClient(
-        "http://pmum.test/",
+        "http://analytics.test/",
+        "analytics-service-token",
         1,
         transport=httpx.MockTransport(handler),
     )
@@ -463,7 +503,9 @@ async def test_http_client_sends_only_six_non_identifying_inputs():
     )
 
     assert result.status == ExperimentalPmumEstimateStatus.ESTIMATED
-    assert captured == {"age": 9, **response_payload()}
+    assert captured["payload"] == {"age": 9, **response_payload()}
+    assert captured["authorization"] == "Bearer analytics-service-token"
+    assert captured["content_type"] == "application/json"
 
 
 def test_experimental_pmum_openapi_contract_is_adult_only():

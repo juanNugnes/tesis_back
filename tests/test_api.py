@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import uuid
 
 import pytest
@@ -311,11 +311,10 @@ async def test_get_empty_activity_preferences_does_not_create_a_record(client):
         "id": None,
         "profile_id": profile["id"],
         "interests": [],
-        "adaptation_type": "NONE",
+        "considerations_answered": False,
         "considerations": [],
         "activities_to_avoid": [],
         "additional_notes": None,
-        "valid_until": None,
         "created_at": None,
         "updated_at": None,
     }
@@ -332,52 +331,347 @@ async def test_create_activity_preferences_with_interests_only(client):
     result = response.json()
     assert result["id"] is not None
     assert result["interests"] == ["DRAWING_CREATING", "READING_STORIES", "MUSIC"]
-    assert result["adaptation_type"] == "NONE"
+    assert result["considerations_answered"] is False
     assert result["considerations"] == []
     assert result["activities_to_avoid"] == []
 
 
 @pytest.mark.asyncio
-async def test_upsert_temporary_activity_preferences(client):
+async def test_activity_preferences_records_explicit_no_considerations(client):
     profile = await create_profile(client)
-    payload = {
-        "interests": ["GAMES_CHALLENGES", "BUILDING"],
-        "adaptation_type": "TEMPORARY",
-        "considerations": ["LEGS", "TEMPORARY_PHYSICAL_DISCOMFORT"],
-        "activities_to_avoid": ["RUNNING", "JUMPING"],
-        "additional_notes": "Por unos dias conviene evitar actividades de impacto.",
-        "valid_until": "2026-10-15",
-    }
-    response = await client.put(f"/api/v1/profiles/{profile['id']}/activity-preferences", json=payload)
+
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={"considerations_answered": True, "considerations": []},
+    )
+
     assert response.status_code == 200
-    result = response.json()
-    for key, value in payload.items():
-        assert result[key] == value
-    assert (await client.get(f"/api/v1/profiles/{profile['id']}/activity-preferences")).json() == result
+    assert response.json()["considerations_answered"] is True
+    assert response.json()["considerations"] == []
 
 
 @pytest.mark.asyncio
-async def test_update_activity_preferences_is_partial_and_keeps_single_resource(client):
+async def test_activity_preferences_accepts_permanent_consideration(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "VISUAL",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["considerations"] == [
+        {
+            "type": "VISUAL",
+            "duration_type": "PERMANENT",
+            "valid_until": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_accepts_temporary_consideration(client):
+    profile = await create_profile(client)
+    valid_until = (date.today() + timedelta(days=10)).isoformat()
+
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "LOWER_BODY_MOBILITY",
+                    "duration_type": "TEMPORARY",
+                    "valid_until": valid_until,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["considerations"][0]["valid_until"] == valid_until
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_accepts_mixed_consideration_durations(client):
+    profile = await create_profile(client)
+    valid_until = (date.today() + timedelta(days=10)).isoformat()
+    considerations = [
+        {
+            "type": "VISUAL",
+            "duration_type": "PERMANENT",
+            "valid_until": None,
+        },
+        {
+            "type": "SOUND_SENSITIVITY",
+            "duration_type": "TEMPORARY",
+            "valid_until": valid_until,
+        },
+    ]
+
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={"considerations_answered": True, "considerations": considerations},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["considerations"] == considerations
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_accepts_both_mobility_considerations(client):
+    profile = await create_profile(client)
+    considerations = [
+        {
+            "type": "UPPER_BODY_MOBILITY",
+            "duration_type": "PERMANENT",
+            "valid_until": None,
+        },
+        {
+            "type": "LOWER_BODY_MOBILITY",
+            "duration_type": "PERMANENT",
+            "valid_until": None,
+        },
+    ]
+
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={"considerations_answered": True, "considerations": considerations},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["considerations"] == considerations
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_rejects_duplicate_consideration_type(client):
+    profile = await create_profile(client)
+    consideration = {
+        "type": "AUDITORY",
+        "duration_type": "PERMANENT",
+        "valid_until": None,
+    }
+
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={
+            "considerations_answered": True,
+            "considerations": [consideration, consideration],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_rejects_temporary_without_valid_until(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "VISUAL",
+                    "duration_type": "TEMPORARY",
+                    "valid_until": None,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_rejects_permanent_with_valid_until(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "VISUAL",
+                    "duration_type": "PERMANENT",
+                    "valid_until": (date.today() + timedelta(days=10)).isoformat(),
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_rejects_expired_temporary_consideration(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "VISUAL",
+                    "duration_type": "TEMPORARY",
+                    "valid_until": (date.today() - timedelta(days=1)).isoformat(),
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_update_replaces_consideration_set(client):
+    profile = await create_profile(client)
+    url = f"/api/v1/profiles/{profile['id']}/activity-preferences"
+    first = await client.put(
+        url,
+        json={
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "VISUAL",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                }
+            ],
+        },
+    )
+    replacement = [
+        {
+            "type": "AUDITORY",
+            "duration_type": "TEMPORARY",
+            "valid_until": (date.today() + timedelta(days=10)).isoformat(),
+        }
+    ]
+
+    second = await client.put(
+        url,
+        json={"considerations_answered": True, "considerations": replacement},
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["considerations"] == replacement
+    assert (await client.get(url)).json()["considerations"] == replacement
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_partial_update_preserves_considerations(client):
     profile = await create_profile(client)
     url = f"/api/v1/profiles/{profile['id']}/activity-preferences"
     first = await client.put(
         url,
         json={
             "interests": ["MUSIC"],
-            "adaptation_type": "TEMPORARY",
-            "considerations": ["HEARING"],
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "AUDITORY",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                }
+            ],
             "additional_notes": "Nota inicial",
         },
     )
+
     second = await client.put(url, json={"activities_to_avoid": ["LOUD_SOUNDS"]})
+
     assert first.status_code == second.status_code == 200
-    result = second.json()
-    assert result["id"] == first.json()["id"]
-    assert result["created_at"] == first.json()["created_at"]
-    assert result["interests"] == ["MUSIC"]
-    assert result["considerations"] == ["HEARING"]
-    assert result["additional_notes"] == "Nota inicial"
-    assert result["activities_to_avoid"] == ["LOUD_SOUNDS"]
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["created_at"] == first.json()["created_at"]
+    assert second.json()["interests"] == ["MUSIC"]
+    assert second.json()["considerations_answered"] is True
+    assert second.json()["considerations"] == first.json()["considerations"]
+    assert second.json()["additional_notes"] == "Nota inicial"
+    assert second.json()["activities_to_avoid"] == ["LOUD_SOUNDS"]
+
+
+@pytest.mark.asyncio
+async def test_marking_considerations_unanswered_clears_existing_set(client):
+    profile = await create_profile(client)
+    url = f"/api/v1/profiles/{profile['id']}/activity-preferences"
+    await client.put(
+        url,
+        json={
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "VISUAL",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                }
+            ],
+        },
+    )
+
+    response = await client.put(url, json={"considerations_answered": False})
+
+    assert response.status_code == 200
+    assert response.json()["considerations_answered"] is False
+    assert response.json()["considerations"] == []
+
+
+@pytest.mark.asyncio
+async def test_unanswered_considerations_rejects_nonempty_list(client):
+    profile = await create_profile(client)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json={
+            "considerations_answered": False,
+            "considerations": [
+                {
+                    "type": "VISUAL",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_activity_preferences_get_returns_exact_persisted_state(client):
+    profile = await create_profile(client)
+    url = f"/api/v1/profiles/{profile['id']}/activity-preferences"
+    payload = {
+        "interests": ["GAMES_CHALLENGES", "BUILDING"],
+        "considerations_answered": True,
+        "considerations": [
+            {
+                "type": "VISUAL",
+                "duration_type": "PERMANENT",
+                "valid_until": None,
+            },
+            {
+                "type": "LOWER_BODY_MOBILITY",
+                "duration_type": "TEMPORARY",
+                "valid_until": (date.today() + timedelta(days=10)).isoformat(),
+            },
+        ],
+        "activities_to_avoid": ["RUNNING", "JUMPING"],
+        "additional_notes": "Mantener como texto informativo.",
+    }
+
+    updated = await client.put(url, json=payload)
+    read = await client.get(url)
+
+    assert updated.status_code == read.status_code == 200
+    assert read.json() == updated.json()
 
 
 @pytest.mark.asyncio
@@ -385,14 +679,25 @@ async def test_update_activity_preferences_is_partial_and_keeps_single_resource(
     "payload",
     [
         {"interests": ["INVALID"]},
-        {"adaptation_type": "INVALID"},
-        {"considerations": ["INVALID"]},
+        {
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "INVALID",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                }
+            ],
+        },
         {"activities_to_avoid": ["INVALID"]},
     ],
 )
 async def test_reject_invalid_activity_preference_enums(client, payload):
     profile = await create_profile(client)
-    response = await client.put(f"/api/v1/profiles/{profile['id']}/activity-preferences", json=payload)
+    response = await client.put(
+        f"/api/v1/profiles/{profile['id']}/activity-preferences",
+        json=payload,
+    )
     assert response.status_code == 422
 
 
@@ -401,63 +706,16 @@ async def test_reject_invalid_activity_preference_enums(client, payload):
     "payload",
     [
         {"interests": ["MUSIC", "MUSIC"]},
-        {"considerations": ["VISION", "VISION"]},
         {"activities_to_avoid": ["RUNNING", "RUNNING"]},
     ],
 )
 async def test_reject_duplicate_activity_preference_values(client, payload):
     profile = await create_profile(client)
-    response = await client.put(f"/api/v1/profiles/{profile['id']}/activity-preferences", json=payload)
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("adaptation_type", "valid_until"),
-    [
-        ("TEMPORARY", None),
-        ("PERMANENT", None),
-        ("NONE", None),
-    ],
-)
-async def test_supported_adaptation_types_without_required_expiration(client, adaptation_type, valid_until):
-    profile = await create_profile(client)
     response = await client.put(
         f"/api/v1/profiles/{profile['id']}/activity-preferences",
-        json={
-            "adaptation_type": adaptation_type,
-            "interests": [],
-            "considerations": [],
-            "activities_to_avoid": [],
-            "valid_until": valid_until,
-        },
+        json=payload,
     )
-    assert response.status_code == 200
-    assert response.json()["adaptation_type"] == adaptation_type
-    assert response.json()["valid_until"] is None
-
-
-@pytest.mark.asyncio
-async def test_none_adaptation_clears_valid_until_without_clearing_collections(client):
-    profile = await create_profile(client)
-    url = f"/api/v1/profiles/{profile['id']}/activity-preferences"
-    await client.put(
-        url,
-        json={
-            "interests": ["OUTDOORS"],
-            "adaptation_type": "TEMPORARY",
-            "considerations": ["MOBILITY"],
-            "activities_to_avoid": ["PROLONGED_STANDING"],
-            "valid_until": "2026-10-15",
-        },
-    )
-    response = await client.put(url, json={"adaptation_type": "NONE"})
-    assert response.status_code == 200
-    result = response.json()
-    assert result["valid_until"] is None
-    assert result["interests"] == ["OUTDOORS"]
-    assert result["considerations"] == ["MOBILITY"]
-    assert result["activities_to_avoid"] == ["PROLONGED_STANDING"]
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

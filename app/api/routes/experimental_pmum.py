@@ -27,9 +27,15 @@ router = APIRouter(
 
 def get_experimental_pmum_client() -> ExperimentalPmumClient:
     settings = get_settings()
+    token = (
+        settings.analytics_service_token.get_secret_value()
+        if settings.analytics_service_token is not None
+        else ""
+    )
     return ExperimentalPmumClient(
-        settings.experimental_pmum_service_url,
-        settings.experimental_pmum_service_timeout_seconds,
+        settings.analytics_service_url,
+        token,
+        settings.analytics_timeout_seconds,
     )
 
 

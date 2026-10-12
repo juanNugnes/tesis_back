@@ -1,4 +1,5 @@
 import enum
+import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,5 +29,6 @@ class ActivitySuggestionRead(BaseModel):
 
 
 class ActivitySuggestionsRead(BaseModel):
+    offer_id: uuid.UUID | None
     context: ActivitySuggestionContext
     activities: list[ActivitySuggestionRead] = Field(max_length=3)

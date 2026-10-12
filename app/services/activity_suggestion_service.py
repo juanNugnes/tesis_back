@@ -1,5 +1,6 @@
 import uuid
 
+from app.repositories.activity_offer_repository import ActivityOfferRepository
 from app.repositories.profile_activity_preferences_repository import (
     ProfileActivityPreferencesRepository,
 )
@@ -20,14 +21,17 @@ class ActivitySuggestionService:
     def __init__(
         self,
         preferences: ProfileActivityPreferencesRepository,
+        offers: ActivityOfferRepository,
         selector: ActivitySelectorGateway,
     ):
         self.preferences = preferences
+        self.offers = offers
         self.selector = selector
 
     async def suggest(
         self,
         profile_id: uuid.UUID,
+        device_id: uuid.UUID,
         context: ActivitySuggestionContext,
     ) -> ActivitySuggestionsRead:
         preferences = await self.preferences.get(profile_id)
@@ -39,13 +43,24 @@ class ActivitySuggestionService:
         activities = await self.selector.recommend(
             context=context.value,
             interests=mapped_interests.selector_tags,
+            eligibility_state=mapped_eligibility.eligibility_state,
             eligibility=mapped_eligibility.eligibility,
             n=3,
         )
+        response_activities = [
+            ActivitySuggestionRead.model_validate(activity)
+            for activity in list(activities)[:3]
+        ]
+        offer = None
+        if response_activities:
+            offer = await self.offers.create_offer(
+                profile_id=profile_id,
+                device_id=device_id,
+                context=context.value,
+                activity_ids=[activity.activity_id for activity in response_activities],
+            )
         return ActivitySuggestionsRead(
+            offer_id=offer.id if offer is not None else None,
             context=context,
-            activities=[
-                ActivitySuggestionRead.model_validate(activity)
-                for activity in list(activities)[:3]
-            ],
+            activities=response_activities,
         )

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Literal, Protocol, Sequence
 
 
 @dataclass(frozen=True)
@@ -21,8 +21,6 @@ class SelectorActivity:
     title: str
     description: str
     category: str
-    interest_tags: tuple[str, ...]
-    allowed_contexts: tuple[str, ...]
     activity_level: str
     bedtime_suitable: bool
     requires_other_person: bool
@@ -42,21 +40,7 @@ class ActivitySelectorGateway(Protocol):
         *,
         context: str,
         interests: tuple[str, ...],
-        eligibility: ActivityEligibility,
+        eligibility_state: Literal["known", "unknown"],
+        eligibility: ActivityEligibility | None,
         n: int = 3,
     ) -> Sequence[SelectorActivity]: ...
-
-
-class UnavailableActivitySelectorGateway:
-    async def recommend(
-        self,
-        *,
-        context: str,
-        interests: tuple[str, ...],
-        eligibility: ActivityEligibility,
-        n: int = 3,
-    ) -> Sequence[SelectorActivity]:
-        raise ActivitySelectorTechnicalError(
-            "SELECTOR_NOT_CONFIGURED",
-            "Activity selector transport is not configured",
-        )

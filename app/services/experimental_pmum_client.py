@@ -55,11 +55,13 @@ class ExperimentalPmumClient:
     def __init__(
         self,
         service_url: str,
+        service_token: str,
         timeout_seconds: float,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.endpoint = f"{service_url.rstrip('/')}/experimental/pmum-estimate"
+        self.service_token = service_token
         self.timeout_seconds = timeout_seconds
         self.transport = transport
 
@@ -71,28 +73,29 @@ class ExperimentalPmumClient:
             ) as client:
                 response = await client.post(
                     self.endpoint,
+                    headers={"Authorization": f"Bearer {self.service_token}"},
                     json=data.model_dump(mode="json"),
                 )
                 response.raise_for_status()
         except httpx.TimeoutException:
             return ExperimentalPmumResult.technical_error(
                 "TIMEOUT",
-                "Experimental PMUM service timed out",
+                "Analytics PMUM service timed out",
             )
         except httpx.ConnectError:
             return ExperimentalPmumResult.technical_error(
                 "CONNECTION_ERROR",
-                "Experimental PMUM service connection failed",
+                "Analytics PMUM service connection failed",
             )
         except httpx.HTTPStatusError as exc:
             return ExperimentalPmumResult.technical_error(
                 "HTTP_ERROR",
-                f"Experimental PMUM service returned HTTP {exc.response.status_code}",
+                f"Analytics PMUM service returned HTTP {exc.response.status_code}",
             )
         except httpx.RequestError:
             return ExperimentalPmumResult.technical_error(
                 "REQUEST_ERROR",
-                "Experimental PMUM service request failed",
+                "Analytics PMUM service request failed",
             )
 
         try:
@@ -100,7 +103,7 @@ class ExperimentalPmumClient:
         except (ValueError, ValidationError):
             return ExperimentalPmumResult.technical_error(
                 "INVALID_RESPONSE",
-                "Experimental PMUM service returned an invalid response",
+                "Analytics PMUM service returned an invalid response",
             )
 
         if payload.status == "estimated":

@@ -1,7 +1,12 @@
+import json
 import uuid
+from dataclasses import asdict
 from datetime import date, timedelta
+from types import SimpleNamespace
 
+import httpx
 import pytest
+from pydantic import SecretStr
 
 from app.api.routes.profile_activity_suggestions import (
     get_activity_selector_gateway,
@@ -14,6 +19,7 @@ from app.services.activity_selector_gateway import (
     ActivitySelectorTechnicalError,
     SelectorActivity,
 )
+from app.services.activity_selector_http_gateway import HttpActivitySelectorGateway
 from app.services.activity_selector_mapper import (
     ActivityEligibilityMapper,
     ActivityInterestMapper,
@@ -26,11 +32,20 @@ class FakeActivitySelectorGateway:
         self.error = None
         self.calls = []
 
-    async def recommend(self, *, context, interests, eligibility, n=3):
+    async def recommend(
+        self,
+        *,
+        context,
+        interests,
+        eligibility_state,
+        eligibility,
+        n=3,
+    ):
         self.calls.append(
             {
                 "context": context,
                 "interests": interests,
+                "eligibility_state": eligibility_state,
                 "eligibility": eligibility,
                 "n": n,
             }
@@ -73,13 +88,32 @@ def selector_activity(index):
         title=f"Activity {index}",
         description=f"Description {index}",
         category="creative",
-        interest_tags=("drawing",),
-        allowed_contexts=("voluntary",),
         activity_level="calm",
         bedtime_suitable=index % 2 == 0,
         requires_other_person=False,
         may_require_device_interaction=False,
     )
+
+
+def analytics_activity(activity):
+    return {
+        **asdict(activity),
+        "interest_tags": ["creative"],
+        "allowed_contexts": ["voluntary", "general"],
+    }
+
+
+def analytics_selection_response(request_payload, activities):
+    status = "selected" if activities else "no_eligible_activities"
+    return {
+        "status": status,
+        "request_id": request_payload["request_id"],
+        "selection_fingerprint": "selection-fingerprint",
+        "catalog_version": "provisional-sha256:catalog",
+        "catalog_status": "PROVISIONAL",
+        "selector_version": "published-selector-sha256:selector",
+        "activities": [analytics_activity(activity) for activity in activities],
+    }
 
 
 def preferences(**overrides):
@@ -150,40 +184,43 @@ def test_interest_mapping_without_known_tags_is_explicitly_empty():
     )
 
 
-@pytest.mark.parametrize(
-    ("adaptation_type", "valid_until", "expected_active"),
-    [
-        ("NONE", date(2027, 1, 1), False),
-        ("TEMPORARY", None, False),
-        ("TEMPORARY", date(2026, 10, 9), True),
-        ("TEMPORARY", date(2026, 10, 8), False),
-        ("PERMANENT", None, True),
-    ],
-)
-def test_adaptation_activity_is_evaluated_in_backend(
-    adaptation_type,
-    valid_until,
-    expected_active,
-):
+def test_omitted_considerations_map_to_unknown_without_eligibility():
+    mapped = ActivityEligibilityMapper.map(preferences())
+
+    assert mapped.eligibility_state == "unknown"
+    assert mapped.eligibility is None
+
+
+def test_explicit_no_considerations_maps_to_known_empty_eligibility():
     mapped = ActivityEligibilityMapper.map(
-        preferences(
-            adaptation_type=adaptation_type,
-            valid_until=valid_until,
-        ),
-        today=date(2026, 10, 9),
+        preferences(considerations_answered=True, considerations=[])
     )
 
-    assert mapped.adaptation_active is expected_active
+    assert mapped.eligibility_state == "known"
     assert mapped.eligibility == ActivityEligibility()
 
 
 def test_considerations_do_not_create_unagreed_eligibility_filters():
     mapped = ActivityEligibilityMapper.map(
-        preferences(considerations=["MOBILITY", "SENSORY_SENSITIVITY"]),
-        today=date(2026, 10, 9),
+        preferences(
+            considerations_answered=True,
+            considerations=[
+                {
+                    "type": "UPPER_BODY_MOBILITY",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                },
+                {
+                    "type": "SOUND_SENSITIVITY",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                },
+            ],
+        ),
     )
 
-    assert mapped.eligibility == ActivityEligibility()
+    assert mapped.eligibility_state == "unknown"
+    assert mapped.eligibility is None
 
 
 def test_activities_to_avoid_do_not_create_unagreed_eligibility_filters():
@@ -192,7 +229,8 @@ def test_activities_to_avoid_do_not_create_unagreed_eligibility_filters():
         today=date(2026, 10, 9),
     )
 
-    assert mapped.eligibility == ActivityEligibility()
+    assert mapped.eligibility_state == "unknown"
+    assert mapped.eligibility is None
 
 
 @pytest.mark.asyncio
@@ -206,11 +244,21 @@ async def test_persisted_preferences_are_mapped_without_sending_notes(
         headers=headers,
         json={
             "interests": ["MUSIC", "MOVEMENT", "DRAWING_CREATING"],
-            "adaptation_type": "TEMPORARY",
-            "considerations": ["MOBILITY"],
+            "considerations_answered": True,
+            "considerations": [
+                {
+                    "type": "LOWER_BODY_MOBILITY",
+                    "duration_type": "TEMPORARY",
+                    "valid_until": (date.today() + timedelta(days=1)).isoformat(),
+                },
+                {
+                    "type": "SOUND_SENSITIVITY",
+                    "duration_type": "PERMANENT",
+                    "valid_until": None,
+                },
+            ],
             "activities_to_avoid": ["RUNNING"],
             "additional_notes": "Do not interpret this free text",
-            "valid_until": (date.today() + timedelta(days=1)).isoformat(),
         },
     )
     assert updated.status_code == 200
@@ -226,7 +274,8 @@ async def test_persisted_preferences_are_mapped_without_sending_notes(
         {
             "context": "voluntary",
             "interests": ("music", "movement"),
-            "eligibility": ActivityEligibility(),
+            "eligibility_state": "unknown",
+            "eligibility": None,
             "n": 3,
         }
     ]
@@ -371,18 +420,22 @@ async def test_gateway_technical_failure_is_not_reported_as_zero_activities(
     }
 
 
-@pytest.mark.asyncio
-async def test_unconfigured_runtime_gateway_returns_controlled_technical_failure(client):
-    profile, headers = await create_profile_and_device(client)
-
-    response = await client.post(
-        f"/api/v1/profiles/{profile['id']}/activity-suggestions",
-        headers=headers,
-        json={"context": "voluntary"},
+def test_runtime_dependency_builds_configured_http_gateway(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.profile_activity_suggestions.get_settings",
+        lambda: SimpleNamespace(
+            analytics_service_url="http://analytics.test/",
+            analytics_service_token=SecretStr("analytics-service-token"),
+            analytics_timeout_seconds=2.5,
+        ),
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "SELECTOR_NOT_CONFIGURED"
+    gateway = get_activity_selector_gateway()
+
+    assert isinstance(gateway, HttpActivitySelectorGateway)
+    assert gateway.endpoint == "http://analytics.test/v1/activities/select"
+    assert gateway.service_token == "analytics-service-token"
+    assert gateway.timeout_seconds == 2.5
 
 
 @pytest.mark.asyncio
@@ -429,3 +482,173 @@ def test_activity_suggestions_openapi_contract_is_device_only():
     ]["post"]
 
     assert operation["security"] == [{"DeviceBearer": []}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activity_count", [3, 1, 0])
+async def test_http_gateway_sends_exact_payload_and_accepts_valid_cardinalities(
+    activity_count,
+):
+    captured = {"payload": None, "authorization": None, "content_type": None}
+    activities = [selector_activity(index) for index in range(activity_count)]
+
+    async def handler(request):
+        request_payload = json.loads(request.content)
+        captured["payload"] = request_payload
+        captured["authorization"] = request.headers.get("Authorization")
+        captured["content_type"] = request.headers.get("Content-Type")
+        return httpx.Response(
+            200,
+            request=request,
+            json=analytics_selection_response(request_payload, activities),
+        )
+
+    gateway = HttpActivitySelectorGateway(
+        "http://analytics.test/",
+        "analytics-service-token",
+        5,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await gateway.recommend(
+        context="voluntary",
+        interests=("music", "movement"),
+        eligibility_state="known",
+        eligibility=ActivityEligibility(),
+        n=3,
+    )
+
+    assert len(result) == activity_count
+    request_id = captured["payload"].pop("request_id")
+    assert request_id.startswith("modera-")
+    assert captured["payload"] == {
+        "context": "voluntary",
+        "interests": ["music", "movement"],
+        "eligibility_state": "known",
+        "eligibility": {},
+        "recently_shown_ids": [],
+    }
+    assert captured["authorization"] == "Bearer analytics-service-token"
+    assert captured["content_type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_http_gateway_unknown_eligibility_omits_filters_and_accepts_unavailable():
+    captured = {}
+
+    async def handler(request):
+        request_payload = json.loads(request.content)
+        captured.update(request_payload)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "status": "unavailable",
+                "reason": "eligibility_unknown",
+                "request_id": request_payload["request_id"],
+                "catalog_version": "provisional-sha256:catalog",
+                "catalog_status": "PROVISIONAL",
+                "selector_version": "published-selector-sha256:selector",
+                "activities": [],
+            },
+        )
+
+    gateway = HttpActivitySelectorGateway(
+        "http://analytics.test",
+        "analytics-service-token",
+        5,
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = await gateway.recommend(
+        context="voluntary",
+        interests=(),
+        eligibility_state="unknown",
+        eligibility=None,
+    )
+
+    assert result == []
+    assert captured["eligibility_state"] == "unknown"
+    assert "eligibility" not in captured
+
+
+@pytest.mark.asyncio
+async def test_analytics_unavailable_is_a_successful_empty_backend_response(client):
+    profile, headers = await create_profile_and_device(client, "Analytics unavailable")
+
+    async def handler(request):
+        request_payload = json.loads(request.content)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "status": "unavailable",
+                "reason": "eligibility_unknown",
+                "request_id": request_payload["request_id"],
+                "catalog_version": "provisional-sha256:catalog",
+                "catalog_status": "PROVISIONAL",
+                "selector_version": "published-selector-sha256:selector",
+                "activities": [],
+            },
+        )
+
+    gateway = HttpActivitySelectorGateway(
+        "http://analytics.test",
+        "analytics-service-token",
+        5,
+        transport=httpx.MockTransport(handler),
+    )
+    app.dependency_overrides[get_activity_selector_gateway] = lambda: gateway
+    try:
+        response = await client.post(
+            f"/api/v1/profiles/{profile['id']}/activity-suggestions",
+            headers=headers,
+            json={"context": "voluntary"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_activity_selector_gateway, None)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "offer_id": None,
+        "context": "voluntary",
+        "activities": [],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scenario", "expected_code"),
+    [
+        ("timeout", "SELECTOR_TIMEOUT"),
+        ("connection", "SELECTOR_CONNECTION_ERROR"),
+        ("http", "SELECTOR_HTTP_ERROR"),
+        ("invalid", "SELECTOR_INVALID_RESPONSE"),
+    ],
+)
+async def test_http_gateway_classifies_technical_failures(scenario, expected_code):
+    async def handler(request):
+        if scenario == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        if scenario == "connection":
+            raise httpx.ConnectError("connection refused", request=request)
+        if scenario == "http":
+            return httpx.Response(500, request=request)
+        return httpx.Response(200, request=request, json={"unexpected": []})
+
+    gateway = HttpActivitySelectorGateway(
+        "http://analytics.test",
+        "analytics-service-token",
+        1,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ActivitySelectorTechnicalError) as exc_info:
+        await gateway.recommend(
+            context="bedtime",
+            interests=(),
+            eligibility_state="known",
+            eligibility=ActivityEligibility(),
+            n=3,
+        )
+
+    assert exc_info.value.code == expected_code

@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime, time, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint, text, true
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint, false, text, true
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -51,6 +51,19 @@ class ActivityInterest(str, enum.Enum):
 
 class AdaptationType(str, enum.Enum):
     NONE = "NONE"
+    TEMPORARY = "TEMPORARY"
+    PERMANENT = "PERMANENT"
+
+
+class ActivityConsiderationType(str, enum.Enum):
+    UPPER_BODY_MOBILITY = "UPPER_BODY_MOBILITY"
+    LOWER_BODY_MOBILITY = "LOWER_BODY_MOBILITY"
+    VISUAL = "VISUAL"
+    AUDITORY = "AUDITORY"
+    SOUND_SENSITIVITY = "SOUND_SENSITIVITY"
+
+
+class ConsiderationDurationType(str, enum.Enum):
     TEMPORARY = "TEMPORARY"
     PERMANENT = "PERMANENT"
 
@@ -182,14 +195,74 @@ class ProfileActivityPreferences(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), unique=True)
     interests: Mapped[list[str]] = mapped_column(JSON, default=list)
-    adaptation_type: Mapped[AdaptationType] = mapped_column(Enum(AdaptationType, name="profile_adaptation_type"))
-    considerations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    legacy_adaptation_type: Mapped[AdaptationType] = mapped_column(
+        "adaptation_type",
+        Enum(AdaptationType, name="profile_adaptation_type"),
+        default=AdaptationType.NONE,
+    )
+    legacy_considerations: Mapped[list[str]] = mapped_column(
+        "considerations",
+        JSON,
+        default=list,
+    )
+    considerations_answered: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=false(),
+    )
     activities_to_avoid: Mapped[list[str]] = mapped_column(JSON, default=list)
     additional_notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    legacy_valid_until: Mapped[date | None] = mapped_column(
+        "valid_until",
+        Date,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     profile: Mapped[Profile] = relationship(back_populates="activity_preferences")
+    considerations: Mapped[list["ProfileActivityConsideration"]] = relationship(
+        back_populates="preferences",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ProfileActivityConsideration.ordinal",
+    )
+
+
+class ProfileActivityConsideration(Base):
+    __tablename__ = "profile_activity_considerations"
+    __table_args__ = (
+        CheckConstraint(
+            "(duration_type = 'TEMPORARY' AND valid_until IS NOT NULL) OR "
+            "(duration_type = 'PERMANENT' AND valid_until IS NULL)",
+            name="ck_profile_activity_considerations_duration_valid_until",
+        ),
+        UniqueConstraint(
+            "preferences_id",
+            "type",
+            name="uq_profile_activity_considerations_preferences_type",
+        ),
+        UniqueConstraint(
+            "preferences_id",
+            "ordinal",
+            name="uq_profile_activity_considerations_preferences_ordinal",
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    preferences_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profile_activity_preferences.id", ondelete="CASCADE"),
+        index=True,
+    )
+    type: Mapped[ActivityConsiderationType] = mapped_column(
+        Enum(ActivityConsiderationType, name="activity_consideration_type")
+    )
+    duration_type: Mapped[ConsiderationDurationType] = mapped_column(
+        Enum(ConsiderationDurationType, name="consideration_duration_type")
+    )
+    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    preferences: Mapped[ProfileActivityPreferences] = relationship(
+        back_populates="considerations"
+    )
 
 
 class AdultAccount(Base):
@@ -392,6 +465,78 @@ class Device(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     profile: Mapped[Profile] = relationship(back_populates="devices")
+
+
+class ActivityOffer(Base):
+    __tablename__ = "activity_offers"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"),
+        index=True,
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"),
+        index=True,
+    )
+    context: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        index=True,
+    )
+    items: Mapped[list["ActivityOfferItem"]] = relationship(
+        back_populates="offer",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ActivityOfferItem.ordinal",
+    )
+    selections: Mapped[list["ActivitySelection"]] = relationship(
+        back_populates="offer",
+        cascade="all, delete-orphan",
+    )
+
+
+class ActivityOfferItem(Base):
+    __tablename__ = "activity_offer_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "offer_id",
+            "activity_id",
+            name="uq_activity_offer_items_offer_activity",
+        ),
+    )
+    offer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("activity_offers.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    activity_id: Mapped[str] = mapped_column(String(100))
+    offer: Mapped[ActivityOffer] = relationship(back_populates="items")
+
+
+class ActivitySelection(Base):
+    __tablename__ = "activity_selections"
+    selection_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    offer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("activity_offers.id", ondelete="CASCADE"),
+        index=True,
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"),
+        index=True,
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"),
+        index=True,
+    )
+    activity_id: Mapped[str] = mapped_column(String(100))
+    selected_at_epoch_millis: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        index=True,
+    )
+    offer: Mapped[ActivityOffer] = relationship(back_populates="selections")
 
 
 class ProfileLinkCode(Base):

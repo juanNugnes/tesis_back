@@ -1,15 +1,15 @@
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable, Protocol
+from typing import Iterable, Literal, Protocol
 
-from app.db.models import ActivityInterest, AdaptationType
+from app.db.models import ActivityInterest
 from app.services.activity_selector_gateway import ActivityEligibility
 
 
 class ActivityPreferencesSource(Protocol):
     interests: Iterable[ActivityInterest | str]
-    adaptation_type: AdaptationType | str
-    valid_until: date | None
+    considerations_answered: bool
+    considerations: Iterable[object]
 
 
 @dataclass(frozen=True)
@@ -49,8 +49,8 @@ class ActivityInterestMapper:
 
 @dataclass(frozen=True)
 class MappedActivityEligibility:
-    eligibility: ActivityEligibility
-    adaptation_active: bool
+    eligibility_state: Literal["known", "unknown"]
+    eligibility: ActivityEligibility | None
 
 
 class ActivityEligibilityMapper:
@@ -61,17 +61,14 @@ class ActivityEligibilityMapper:
         *,
         today: date | None = None,
     ) -> MappedActivityEligibility:
-        adaptation_type = AdaptationType(preferences.adaptation_type)
-        reference_date = today or date.today()
-        adaptation_active = (
-            adaptation_type == AdaptationType.PERMANENT
-            or (
-                adaptation_type == AdaptationType.TEMPORARY
-                and preferences.valid_until is not None
-                and preferences.valid_until >= reference_date
+        if preferences.considerations_answered and not list(
+            preferences.considerations
+        ):
+            return MappedActivityEligibility(
+                eligibility_state="known",
+                eligibility=ActivityEligibility(),
             )
-        )
         return MappedActivityEligibility(
-            eligibility=ActivityEligibility(),
-            adaptation_active=adaptation_active,
+            eligibility_state="unknown",
+            eligibility=None,
         )
