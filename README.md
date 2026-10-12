@@ -71,6 +71,8 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `PUT /api/v1/profiles/{profile_id}/activity-preferences`
 - `POST /api/v1/profiles/{profile_id}/activity-suggestions`
 - `POST /api/v1/profiles/{profile_id}/activity-selections`
+- `POST /api/v1/profiles/{profile_id}/historical-submissions`
+- `POST /api/v1/profiles/{profile_id}/historical-submissions/{submission_id}/retry`
 - `POST /api/v1/profiles/{profile_id}/contexts`
 - `GET /api/v1/profiles/{profile_id}/contexts`
 - `GET /api/v1/profiles/{profile_id}/contexts/active`
@@ -339,6 +341,76 @@ La revocacion se aplica al momento de recepcion: el mismo Device JWT recibe `403
 Los cambios `APPROVED`, `REJECTED`, `CONSENT_GRANTED` y `CONSENT_REVOKED` generan `AuditEvent` con actor, Profile, resultado y metadata minima. El audit no guarda OTP, JWT, codigos temporales, documentos ni payloads de Usage, y no se usa como fuente de verdad para autorizar.
 
 El email/OTP, `ADULT_PROFILE_LINK` y estos controles no prueban por si solos representacion legal. `RepresentativeVerification` representa un proceso manual MVP. Estos controles implementan requisitos tecnicos del MVP y no constituyen por si solos una evaluacion de cumplimiento legal integral.
+
+## Histórico F12/C1 (endpoint técnico candidato)
+
+`POST /api/v1/profiles/{profile_id}/historical-submissions` es un recorrido
+técnico DeviceBearer para una representación F12 ya preparada. No es todavía el
+contrato Android definitivo y no recibe exports JSON/JSONL ni ejecuta el
+preparador Python. Usa la misma URL, credencial Bearer y timeout internos de
+analytics que Activities y PMUM, y llama `POST /v1/historical/evaluate`.
+
+El request candidato es:
+
+```json
+{
+  "request_id": "fixture-2026-09-01",
+  "time_zone": "America/Argentina/Buenos_Aires",
+  "measurement_version": "capture-test-v1",
+  "representation": {
+    "representation_record_id": "valor-del-preparador-reemplazado-por-backend",
+    "representation_spec_id": "daily_use_duration_minutes_v2",
+    "subject_id": "valor-del-preparador-reemplazado-por-backend",
+    "phenomenon": "DAILY_USE_DURATION",
+    "interval_start": "2026-09-01T03:00:00+00:00",
+    "interval_end": "2026-09-02T03:00:00+00:00",
+    "value": 60.0,
+    "unit": "minutes",
+    "status": "OBSERVED",
+    "coverage": {
+      "value": null,
+      "basis": "daily_capture_completeness_not_quantified"
+    },
+    "quality_flags": [],
+    "provenance": {
+      "source_id": "android-usage-events",
+      "source_version": "f12-backend-bridge-v1-candidate",
+      "source_semantics": "Interactive screen duration on assigned device; user attribution unverified",
+      "adapter_version": "v2",
+      "input_fingerprint": "<fingerprint-del-preparador>"
+    },
+    "computed_at": "2026-09-02T03:02:00+00:00"
+  }
+}
+```
+
+El backend obtiene `profile_id` del path autorizado y `device_id` del JWT. La
+fila `Device` existente ya representa de forma persistente la asignación
+perfil-dispositivo, por lo que su UUID se reutiliza como `assignment_id`; no se
+duplica esa relación en otra tabla. `subject_id` y `representation_record_id`
+del caller nunca son autoritativos: el backend los reemplaza con identificadores
+estables derivados de la asignación, zona, versión de medición, puente y tzdata.
+El intervalo debe coincidir exactamente con el día local completo de la zona
+IANA declarada.
+
+Antes del primer HTTP se guarda en `historical_submissions` el payload final
+completo, su SHA-256 y el `request_id`. Los estados son `PENDING`, `SENDING`,
+`PROCESSED`, `CONFLICT` y `TECHNICAL_ERROR`. Un `200 processed`, incluido
+`result.evaluation.outcome=ABSTAIN`, queda `PROCESSED`. Un `409` de analytics
+queda `CONFLICT`. Timeout, conexión, `5xx` o respuesta inválida quedan como
+errores técnicos reintentables; otros errores HTTP quedan técnicos pero no se
+reintentan sin corregir su causa.
+
+`POST /api/v1/profiles/{profile_id}/historical-submissions/{submission_id}/retry`
+no recibe body: vuelve a enviar el payload congelado con el mismo `request_id` y
+actualiza la misma fila. Sólo admite `TECHNICAL_ERROR` marcado reintentable; no
+permite usar retry para eludir un conflicto. Los envíos se serializan por serie,
+con lock local y reserva durable en base de datos, y un día posterior se bloquea
+mientras exista uno anterior sin procesar.
+
+Quedan fuera de este candidato la ingesta Android automática, la ejecución del
+preparador, upload de exports, cierre diario, evidencia tardía/correcciones,
+configuración C1 calibrada y cualquier alerta o interpretación clínica.
 
 ## PMUM-SF experimental
 

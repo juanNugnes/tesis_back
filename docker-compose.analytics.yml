@@ -1,0 +1,37 @@
+services:
+  analytics:
+    image: modera-analytics:historical-candidate
+
+    environment:
+      ANALYTICS_SERVICE_TOKEN: ${ANALYTICS_SERVICE_TOKEN}
+      ANALYTICS_HOST: 0.0.0.0
+      ANALYTICS_PORT: "8765"
+
+      ANALYTICS_PMUM_ENABLED: "false"
+      ANALYTICS_ACTIVITIES_ENABLED: "true"
+      ANALYTICS_HISTORICAL_ENABLED: "true"
+
+      ANALYTICS_HISTORICAL_CONFIG_PATH: /config/historical.json
+      ANALYTICS_HISTORICAL_REPOSITORY_PATH: /var/lib/modera/historical/history.json
+
+    volumes:
+      - historical_state_smoke:/var/lib/modera/historical
+      - type: bind
+        source: C:/Users/Juan/Projects/modera-modelo/tests/fixtures/historical_c1_smoke_only.json
+        target: /config/historical.json
+        read_only: true
+
+    read_only: true
+
+    tmpfs:
+      - /tmp
+
+  backend:
+    depends_on:
+      db:
+        condition: service_healthy
+      analytics:
+        condition: service_started
+
+volumes:
+  historical_state_smoke:

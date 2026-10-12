@@ -3,6 +3,7 @@ import uuid
 from datetime import date, datetime, time, timezone
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint, false, text, true
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -131,6 +132,14 @@ class ExperimentalPmumEstimateStatus(str, enum.Enum):
     ESTIMATED = "estimated"
     UNAVAILABLE = "unavailable"
     TECHNICAL_ERROR = "technical_error"
+
+
+class HistoricalSubmissionStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    SENDING = "SENDING"
+    PROCESSED = "PROCESSED"
+    CONFLICT = "CONFLICT"
+    TECHNICAL_ERROR = "TECHNICAL_ERROR"
 
 
 class Profile(Base):
@@ -537,6 +546,88 @@ class ActivitySelection(Base):
         index=True,
     )
     offer: Mapped[ActivityOffer] = relationship(back_populates="selections")
+
+
+class HistoricalSubmission(Base):
+    __tablename__ = "historical_submissions"
+    __table_args__ = (
+        CheckConstraint(
+            "assignment_id = device_id",
+            name="ck_historical_submissions_assignment_is_device",
+        ),
+        CheckConstraint(
+            "attempts >= 0",
+            name="ck_historical_submissions_attempts_non_negative",
+        ),
+        CheckConstraint(
+            "interval_start < interval_end",
+            name="ck_historical_submissions_interval",
+        ),
+        UniqueConstraint(
+            "series_key",
+            "local_date",
+            name="uq_historical_submissions_series_local_date",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    request_id: Mapped[str] = mapped_column(String(128), unique=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"),
+        index=True,
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"),
+        index=True,
+    )
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"),
+        index=True,
+    )
+    local_date: Mapped[date] = mapped_column(Date)
+    time_zone: Mapped[str] = mapped_column(String(128))
+    measurement_version: Mapped[str] = mapped_column(String(100))
+    bridge_version: Mapped[str] = mapped_column(String(100))
+    tzdata_version: Mapped[str] = mapped_column(String(50))
+    series_key: Mapped[str] = mapped_column(String(71), index=True)
+    representation_record_id: Mapped[str] = mapped_column(String(68), unique=True)
+    interval_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    interval_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[HistoricalSubmissionStatus] = mapped_column(
+        Enum(HistoricalSubmissionStatus, name="historical_submission_status"),
+        default=HistoricalSubmissionStatus.PENDING,
+        index=True,
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    analytics_response: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+    )
+    analytics_evaluation_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    analytics_replayed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
 
 
 class ProfileLinkCode(Base):
