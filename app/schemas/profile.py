@@ -16,10 +16,11 @@ class ProfileCreate(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     alias: str | None = Field(default=None, min_length=1, max_length=100)
     age: int | None = Field(default=None, ge=6, le=12)
     avatar: Avatar | None = None
-    active: bool | None = None
 
 
 class ProfileRead(BaseModel):

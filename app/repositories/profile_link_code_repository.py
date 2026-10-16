@@ -61,3 +61,23 @@ class ProfileLinkCodeRepository:
             .execution_options(synchronize_session=False)
         )
         return result.rowcount == 1
+
+    async def revoke_pending_for_profile(
+        self,
+        profile_id: uuid.UUID,
+        purpose: str,
+        revoked_at: datetime,
+    ) -> int:
+        result = await self.db.execute(
+            update(ProfileLinkCode)
+            .where(
+                ProfileLinkCode.profile_id == profile_id,
+                ProfileLinkCode.purpose == purpose,
+                ProfileLinkCode.used_at.is_(None),
+                ProfileLinkCode.revoked_at.is_(None),
+                ProfileLinkCode.expires_at > revoked_at,
+            )
+            .values(revoked_at=revoked_at)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount

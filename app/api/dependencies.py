@@ -11,9 +11,17 @@ from app.core.security import (
     InvalidAccessTokenError,
     peek_access_token_type,
 )
-from app.db.models import AdultAccount, Device, Profile
+from app.db.models import (
+    AdultAccount,
+    Device,
+    Profile,
+    RepresentativeVerificationStatus,
+)
 from app.db.session import get_db
 from app.repositories.profile_repository import ProfileRepository
+from app.repositories.representative_verification_repository import (
+    RepresentativeVerificationRepository,
+)
 from app.services.adult_auth_service import AdultAuthService
 from app.services.adult_profile_service import AdultProfileService
 from app.services.device_auth_service import DeviceAuthService
@@ -225,5 +233,26 @@ async def require_profile_access(
     profile = await AdultProfileService(db).get_authorized_profile(current_adult, profile_id)
     if profile is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Profile access denied")
+    return profile
+
+
+async def require_verified_profile_access(
+    profile: Profile = Depends(require_profile_access),
+    current_adult: AdultAccount = Depends(get_current_adult),
+    db: AsyncSession = Depends(get_db),
+) -> Profile:
+    verification = await RepresentativeVerificationRepository(db).get_by_adult_profile(
+        current_adult.id,
+        profile.id,
+    )
+    if (
+        not profile.active
+        or verification is None
+        or verification.status != RepresentativeVerificationStatus.APPROVED
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Verified profile access required",
+        )
     return profile
 

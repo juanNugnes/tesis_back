@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -47,3 +47,34 @@ class DeviceRepository:
             select(Device).where(Device.profile_id == profile_id).order_by(Device.created_at.asc())
         )
         return list(result.scalars().all())
+
+    async def get_for_profile(
+        self,
+        profile_id: uuid.UUID,
+        device_id: uuid.UUID,
+    ) -> Device | None:
+        return await self.db.scalar(
+            select(Device).where(
+                Device.id == device_id,
+                Device.profile_id == profile_id,
+            )
+        )
+
+    async def deactivate_if_active(
+        self,
+        profile_id: uuid.UUID,
+        device_id: uuid.UUID,
+        *,
+        updated_at: datetime,
+    ) -> bool:
+        result = await self.db.execute(
+            update(Device)
+            .where(
+                Device.id == device_id,
+                Device.profile_id == profile_id,
+                Device.active.is_(True),
+            )
+            .values(active=False, updated_at=updated_at)
+            .returning(Device.id)
+        )
+        return result.scalar_one_or_none() is not None

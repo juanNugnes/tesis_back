@@ -142,11 +142,11 @@ async def test_update_age(client):
 
 
 @pytest.mark.asyncio
-async def test_update_active(client):
+async def test_reject_update_active(client):
     profile = await create_profile(client)
     response = await client.put(f"/api/v1/profiles/{profile['id']}", json={"active": False})
-    assert response.status_code == 200
-    assert response.json()["active"] is False
+    assert response.status_code == 422
+    assert (await client.get(f"/api/v1/profiles/{profile['id']}")).json()["active"] is True
 
 
 @pytest.mark.asyncio
@@ -154,14 +154,14 @@ async def test_update_multiple_profile_fields(client):
     profile = await create_profile(client)
     response = await client.put(
         f"/api/v1/profiles/{profile['id']}",
-        json={"alias": "Perfil C", "age": 11, "avatar": "lion", "active": False},
+        json={"alias": "Perfil C", "age": 11, "avatar": "lion"},
     )
     assert response.status_code == 200
     result = response.json()
     assert result["alias"] == "Perfil C"
     assert result["age"] == 11
     assert result["avatar"] == "lion"
-    assert result["active"] is False
+    assert result["active"] is True
 
 
 @pytest.mark.asyncio

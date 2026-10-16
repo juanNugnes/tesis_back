@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import func, select
 
-from app.db.models import Device, ProfileLinkCode
+from app.db.models import Device, Profile, ProfileLinkCode
 from app.repositories.profile_repository import ProfileRepository
 from app.services.profile_link_service import ProfileLinkService
 
@@ -309,12 +309,10 @@ async def test_claim_rejects_profile_deactivated_after_code_creation(client, db_
         headers=headers,
     )
     link_code = generated.json()
-    updated = await client.put(
-        f"/api/v1/profiles/{profile['id']}",
-        headers=headers,
-        json={"active": False},
-    )
-    assert updated.status_code == 200
+    stored_profile = await db_session.get(Profile, uuid.UUID(profile["id"]))
+    assert stored_profile is not None
+    stored_profile.active = False
+    await db_session.commit()
 
     response = await client.post(
         "/api/v1/device-links/claim",
