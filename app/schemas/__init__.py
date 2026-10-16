@@ -24,7 +24,18 @@ from app.schemas.profile_link import (
     DeviceLinkClaimResponse,
     DeviceLinkCodeRead,
 )
-from app.schemas.usage import AppUsageCreate, AppUsageRead, DailyUsageCreate, DailyUsageRead
+from app.schemas.usage import (
+    AppUsageCreate,
+    AppUsageRead,
+    DailyUsageCreate,
+    DailyUsageRead,
+    NightWindowDefinition,
+    UsageCoverageStatus,
+    UsageMetricStatus,
+    UsageMetricStatuses,
+    UsageSourceRead,
+    UsageWriteResult,
+)
 
 __all__ = [
     "ProfileCreate",
@@ -52,6 +63,12 @@ __all__ = [
     "AppUsageRead",
     "DailyUsageCreate",
     "DailyUsageRead",
+    "NightWindowDefinition",
+    "UsageCoverageStatus",
+    "UsageMetricStatus",
+    "UsageMetricStatuses",
+    "UsageSourceRead",
+    "UsageWriteResult",
     "AnalysisCreate",
     "AnalysisRead",
     "AdultOtpRequest",

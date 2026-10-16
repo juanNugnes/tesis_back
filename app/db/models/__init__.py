@@ -24,6 +24,7 @@ from app.db.models.entities import (
     ConsiderationDurationType,
     DailyUsage,
     Device,
+    DeviceDailyUsageHead,
     DeviceBootstrapToken,
     FunctionalConsideration,
     HistoricalSubmission,
@@ -42,6 +43,10 @@ from app.db.models.entities import (
     RiskLevel,
     RepresentativeVerification,
     RepresentativeVerificationStatus,
+    SnapshotAppUsage,
+    UsageCoverageStatus,
+    UsageMetricStatus,
+    UsageSnapshot,
 )
 
 __all__ = [
@@ -82,10 +87,15 @@ __all__ = [
     "Avatar",
     "DailyUsage",
     "Device",
+    "DeviceDailyUsageHead",
     "DeviceBootstrapToken",
     "AppUsage",
     "AnalysisResult",
     "Alert",
     "RiskLevel",
     "ProfileLinkCode",
+    "SnapshotAppUsage",
+    "UsageCoverageStatus",
+    "UsageMetricStatus",
+    "UsageSnapshot",
 ]

@@ -285,9 +285,32 @@ async def test_protected_routes_require_their_expected_bearer(client):
     usage = await client.post(
         f"/api/v1/profiles/{profile['id']}/usage",
         json={
+            "snapshot_id": "00000000-0000-0000-0000-000000001005",
+            "captured_at": "2026-10-05T12:00:00Z",
             "date": "2026-10-05",
+            "period_start_at": "2026-10-05T00:00:00Z",
+            "period_end_at": "2026-10-05T11:00:00Z",
+            "timezone": "UTC",
+            "duration_unit": "MINUTES",
+            "measurement_method": "ANDROID_USAGE_STATS_AGGREGATES",
+            "calculation_version": "1.0",
+            "coverage_status": "UNKNOWN",
             "total_usage_minutes": 10,
             "night_usage_minutes": 0,
+            "applications": [],
+            "metric_statuses": {
+                "total_usage_minutes": "MEASURED",
+                "session_count": "UNAVAILABLE",
+                "night_usage_minutes": "MEASURED",
+                "max_session_minutes": "UNAVAILABLE",
+                "unlock_count": "UNAVAILABLE",
+                "applications": "MEASURED",
+            },
+            "night_window": {
+                "source": "PROFILE_SLEEP_SCHEDULE",
+                "start_local_time": "22:00:00",
+                "end_local_time": "07:00:00",
+            },
         },
     )
     assert usage.status_code == 401

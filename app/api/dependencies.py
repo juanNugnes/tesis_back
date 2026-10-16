@@ -155,16 +155,19 @@ async def require_device_profile_access(
 
 
 async def require_usage_monitoring_authorization(
-    profile: Profile = Depends(require_device_profile_access),
+    profile_id: uuid.UUID,
+    current_device: Device = Depends(get_current_device),
     db: AsyncSession = Depends(get_db),
-) -> Profile:
-    allowed = await MonitoringAuthorizationService(db).is_usage_monitoring_allowed(profile.id)
+) -> Device:
+    if current_device.profile_id != profile_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Profile access denied")
+    allowed = await MonitoringAuthorizationService(db).is_usage_monitoring_allowed(profile_id)
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Monitoring authorization is not active",
         )
-    return profile
+    return current_device
 
 
 async def require_profile_principal_access(

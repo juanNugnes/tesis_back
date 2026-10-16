@@ -451,6 +451,219 @@ Los resultados persistidos distinguen `estimated`, `unavailable` y `technical_er
 
 Permanecen pendientes el texto definitivo de las preguntas, los huecos de categorias horarias originales, el mapping de sexo de Modera a codigos 1/2, la validacion con poblacion argentina, la aprobacion para mostrar resultados a familias, el deploy final del servicio y la distribucion segura del `.joblib`. No se inventan reglas para estos contratos todavia abiertos.
 
+## Metricas agregadas Android
+
+Este circuito recibe exclusivamente instantaneas agregadas. No recibe eventos
+originales, no construye F12 y no invoca Analytics. El Device se obtiene del
+`DeviceBearer` y el Profile del path; el body no permite declarar una identidad.
+
+Cada POST es una instantanea completa y acumulada para el intervalo declarado:
+
+```http
+POST /api/v1/profiles/{profile_id}/usage
+Authorization: Bearer <device-access-token>
+Content-Type: application/json
+
+{
+  "snapshot_id": "7b2cb933-d975-4be9-8870-bd01112ef412",
+  "captured_at": "2026-10-16T20:35:42Z",
+  "date": "2026-10-16",
+  "period_start_at": "2026-10-16T00:00:00-03:00",
+  "period_end_at": "2026-10-16T17:35:00-03:00",
+  "timezone": "America/Argentina/Buenos_Aires",
+  "duration_unit": "MINUTES",
+  "measurement_method": "ANDROID_USAGE_STATS_AGGREGATES",
+  "calculation_version": "android-collector-1.0",
+  "coverage_status": "UNKNOWN",
+  "total_usage_minutes": 184,
+  "session_count": 21,
+  "night_usage_minutes": 14,
+  "max_session_minutes": 37,
+  "unlock_count": 29,
+  "applications": [
+    {
+      "package_name": "com.example.video",
+      "app_name": "Example Video",
+      "category": null,
+      "usage_minutes": 73
+    }
+  ],
+  "metric_statuses": {
+    "total_usage_minutes": "MEASURED",
+    "session_count": "MEASURED",
+    "night_usage_minutes": "MEASURED",
+    "max_session_minutes": "MEASURED",
+    "unlock_count": "MEASURED",
+    "applications": "MEASURED"
+  },
+  "night_window": {
+    "source": "PROFILE_SLEEP_SCHEDULE",
+    "start_local_time": "22:00:00",
+    "end_local_time": "07:00:00"
+  }
+}
+```
+
+`period_start_at` es inclusivo y `period_end_at` exclusivo. Identifican el
+intervalo consultado; `captured_at` solo indica cuando se genero la instantanea.
+Los datetimes incluyen offset, la zona es IANA y el intervalo debe quedar dentro
+de `date` en esa zona. El fin no puede ser posterior a la captura.
+
+La unidad contractual es el minuto entero. Android acumula primero la duracion
+fuente en milisegundos y aplica `floor(totalMillis / 60000)` una vez por metrica;
+para Apps lo hace una vez por paquete. El backend no convierte ni completa datos.
+Por redondeos, exclusiones o consultas parciales, Apps no tiene que sumar el mismo
+valor que `total_usage_minutes`.
+
+`total_usage_minutes` es la duracion que el colector agregado basado en Android
+UsageStats atribuye al uso de aplicaciones en el intervalo. No representa pantalla
+encendida, duracion interactiva F12 ni atribucion personal. Los tiempos sumados
+entre Devices pueden superponerse.
+
+`session_count` es la cantidad de sesiones delimitadas por el algoritmo identificado
+por `calculation_version`; `max_session_minutes` es la mayor de esas sesiones y
+`unlock_count` la cantidad de desbloqueos observados por el colector. El backend no
+infiere ninguno de esos valores. `applications[].usage_minutes` es la duracion
+atribuida a cada package y `category`, cuando llega, se conserva como dato de la
+fuente: el backend no clasifica aplicaciones. Ante categorias incompatibles entre
+fuentes, el consolidado usa `null`.
+
+`night_usage_minutes` es la interseccion calculada por Android entre ese uso y el
+horario local persistido en `night_window`, incluso si cruza medianoche. El backend
+no lo estima. Sin informacion suficiente Android envia `null` y el estado causal.
+
+Estados por metrica:
+
+- `MEASURED`: exige valor; cero es una medicion valida.
+- `UNAVAILABLE`, `PERMISSION_DENIED` y `CAPTURE_ERROR`: exigen `null`.
+- `INCOMPLETE`: admite un valor parcial o `null`.
+- Para Apps, `[] + MEASURED` significa medicion valida sin aplicaciones;
+  `null` significa que no hubo una medicion utilizable.
+
+La cobertura admite `UNKNOWN` y `PARTIAL`. `UNKNOWN` se conserva mientras no haya
+evidencia verificable de continuidad fisica. `PARTIAL` requiere evidencia concreta
+de cobertura parcial. Esta version rechaza `COMPLETE` y nunca lo infiere por el
+exito tecnico de una consulta.
+
+Una creacion responde `201`; una actualizacion o reintento conocido, `200`. El
+header `X-Usage-Write-Result` y el campo `result` contienen `created`, `updated` o
+`unchanged`. El body tiene esta forma:
+
+```json
+{
+  "result": "created",
+  "usage": {
+    "id": "<daily-usage-uuid>",
+    "profile_id": "<profile-uuid>",
+    "date": "2026-10-16",
+    "total_usage_minutes": 184,
+    "session_count": 21,
+    "night_usage_minutes": 14,
+    "max_session_minutes": 37,
+    "unlock_count": 29,
+    "applications": [
+      {
+        "id": "<app-usage-uuid>",
+        "daily_usage_id": "<daily-usage-uuid>",
+        "package_name": "com.example.video",
+        "app_name": "Example Video",
+        "category": null,
+        "usage_minutes": 73
+      }
+    ],
+    "metric_statuses": {
+      "total_usage_minutes": "MEASURED",
+      "session_count": "MEASURED",
+      "night_usage_minutes": "MEASURED",
+      "max_session_minutes": "MEASURED",
+      "unlock_count": "MEASURED",
+      "applications": "MEASURED"
+    },
+    "coverage_status": "UNKNOWN",
+    "period_start_at": "2026-10-16T03:00:00Z",
+    "period_end_at": "2026-10-16T20:35:00Z",
+    "timezone": "America/Argentina/Buenos_Aires",
+    "duration_unit": "MINUTES",
+    "measurement_method": "ANDROID_USAGE_STATS_AGGREGATES",
+    "calculation_version": "android-collector-1.0",
+    "night_window": {
+      "source": "PROFILE_SLEEP_SCHEDULE",
+      "start_local_time": "22:00:00",
+      "end_local_time": "07:00:00"
+    },
+    "periods_uniform": true,
+    "source_count": 1,
+    "sources": [
+      {
+        "snapshot_id": "7b2cb933-d975-4be9-8870-bd01112ef412",
+        "device_id": "<device-uuid>",
+        "captured_at": "2026-10-16T20:35:42Z",
+        "period_start_at": "2026-10-16T03:00:00Z",
+        "period_end_at": "2026-10-16T20:35:00Z",
+        "timezone": "America/Argentina/Buenos_Aires",
+        "duration_unit": "MINUTES",
+        "measurement_method": "ANDROID_USAGE_STATS_AGGREGATES",
+        "calculation_version": "android-collector-1.0",
+        "coverage_status": "UNKNOWN",
+        "total_usage_minutes": 184,
+        "session_count": 21,
+        "night_usage_minutes": 14,
+        "max_session_minutes": 37,
+        "unlock_count": 29,
+        "applications": [
+          {
+            "package_name": "com.example.video",
+            "app_name": "Example Video",
+            "category": null,
+            "usage_minutes": 73
+          }
+        ],
+        "metric_statuses": {
+          "total_usage_minutes": "MEASURED",
+          "session_count": "MEASURED",
+          "night_usage_minutes": "MEASURED",
+          "max_session_minutes": "MEASURED",
+          "unlock_count": "MEASURED",
+          "applications": "MEASURED"
+        },
+        "night_window": {
+          "source": "PROFILE_SLEEP_SCHEDULE",
+          "start_local_time": "22:00:00",
+          "end_local_time": "07:00:00"
+        }
+      }
+    ],
+    "created_at": "<datetime>",
+    "updated_at": "<datetime>"
+  }
+}
+```
+
+Se conservan todas las instantaneas agregadas aceptadas y un hash canonico.
+Reenviar el mismo ID y contenido devuelve `unchanged` aunque ya no sea la cabecera.
+El mismo ID con otro contenido devuelve `409 snapshot_conflict`; un ID nuevo mas
+antiguo, `409 stale_snapshot`; dos IDs con igual `captured_at`,
+`409 ambiguous_order`. Estos `409` son terminales para ese payload. Ante error de
+red o `5xx`, Android reintenta exactamente el mismo ID y body.
+
+El consolidado suma duraciones, sesiones, desbloqueos y Apps por paquete entre las
+cabeceras vigentes, y toma el maximo de sesion. No suma revisiones del mismo Device.
+Si las fuentes tienen periodos, zonas o versiones diferentes, los campos uniformes
+quedan `null`, `periods_uniform=false` y `sources` preserva el detalle original.
+
+Las lecturas son Adult-only y los filtros son inclusivos:
+
+```text
+GET /api/v1/profiles/{profile_id}/usage
+GET /api/v1/profiles/{profile_id}/usage?date_from=2026-10-10&date_to=2026-10-16
+GET /api/v1/profiles/{profile_id}/usage/2026-10-16
+```
+
+`USAGE_SNAPSHOT_RETENTION_DAYS` deja prevista una politica configurable, pero no
+activa borrado automatico. Las instantaneas son necesarias para reintentos
+historicos y tienen FK al Profile con eliminacion en cascada para una futura
+supresion deliberada del perfil.
+
 ## Cambios requeridos en Android
 
 Android debe conservar `bootstrap_token` al crear el Profile, enviarlo como Bearer al registrar el primer Device y reemplazarlo por el `access_token` Device devuelto. Tambien debe guardar el token nuevo recibido por `/device-links/claim`, enviar `DeviceBearer` en Usage, Profile, Settings, ActivityPreferences y generacion de `adult-link-codes`, y borrar o renovar la credencial cuando el backend responda `401`.

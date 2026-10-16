@@ -64,9 +64,32 @@ async def link_adult(client, profile, device_headers, email):
 
 def usage_payload(day="2026-10-06"):
     return {
+        "snapshot_id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"device-auth:{day}")),
+        "captured_at": f"{day}T12:00:00Z",
         "date": day,
+        "period_start_at": f"{day}T00:00:00Z",
+        "period_end_at": f"{day}T11:00:00Z",
+        "timezone": "UTC",
+        "duration_unit": "MINUTES",
+        "measurement_method": "ANDROID_USAGE_STATS_AGGREGATES",
+        "calculation_version": "1.0",
+        "coverage_status": "UNKNOWN",
         "total_usage_minutes": 15,
         "night_usage_minutes": 0,
+        "metric_statuses": {
+            "total_usage_minutes": "MEASURED",
+            "session_count": "UNAVAILABLE",
+            "night_usage_minutes": "MEASURED",
+            "max_session_minutes": "UNAVAILABLE",
+            "unlock_count": "UNAVAILABLE",
+            "applications": "MEASURED",
+        },
+        "applications": [],
+        "night_window": {
+            "source": "PROFILE_SLEEP_SCHEDULE",
+            "start_local_time": "22:00:00",
+            "end_local_time": "07:00:00",
+        },
     }
 
 

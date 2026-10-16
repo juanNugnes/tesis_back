@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 import uuid
 
@@ -54,16 +55,40 @@ async def create_context(client, profile_id, **overrides):
     return response.json()
 
 
-def usage_payload():
-    return {
+def usage_payload(**overrides):
+    payload = {
+        "snapshot_id": "00000000-0000-0000-0000-000000000815",
+        "captured_at": "2026-08-15T20:00:00Z",
         "date": "2026-08-15",
+        "period_start_at": "2026-08-15T00:00:00Z",
+        "period_end_at": "2026-08-15T19:00:00Z",
+        "timezone": "UTC",
+        "duration_unit": "MINUTES",
+        "measurement_method": "ANDROID_USAGE_STATS_AGGREGATES",
+        "calculation_version": "1.0",
+        "coverage_status": "UNKNOWN",
         "total_usage_minutes": 230,
         "session_count": 25,
         "night_usage_minutes": 45,
         "max_session_minutes": 60,
         "unlock_count": 35,
         "applications": [{"package_name": "com.example.app", "app_name": "Ejemplo", "category": "SOCIAL", "usage_minutes": 80}],
+        "metric_statuses": {
+            "total_usage_minutes": "MEASURED",
+            "session_count": "MEASURED",
+            "night_usage_minutes": "MEASURED",
+            "max_session_minutes": "MEASURED",
+            "unlock_count": "MEASURED",
+            "applications": "MEASURED",
+        },
+        "night_window": {
+            "source": "PROFILE_SLEEP_SCHEDULE",
+            "start_local_time": "22:00:00",
+            "end_local_time": "07:00:00",
+        },
     }
+    payload.update(overrides)
+    return payload
 
 
 @pytest.mark.asyncio
@@ -917,7 +942,10 @@ async def test_register_usage_and_get_history(client, adult_session, monitoring_
         json=usage_payload(),
     )
     assert response.status_code == 201
-    assert response.json()["applications"][0]["usage_minutes"] == 80
+    assert response.json()["usage"]["applications"][0]["usage_minutes"] == 80
+    assert response.json()["usage"]["total_usage_minutes"] == 230
+    assert response.json()["usage"]["calculation_version"] == "1.0"
+    assert response.json()["usage"]["coverage_status"] == "UNKNOWN"
     headers, _ = await adult_session(profile["id"])
     history = await client.get(f"/api/v1/profiles/{profile['id']}/usage", headers=headers)
     assert history.status_code == 200
@@ -925,16 +953,16 @@ async def test_register_usage_and_get_history(client, adult_session, monitoring_
 
 
 @pytest.mark.asyncio
-async def test_reject_duplicate_usage(client, monitoring_authorization):
+async def test_exact_usage_retry_is_idempotent(client, monitoring_authorization):
     profile = await create_profile(client)
     await monitoring_authorization(profile["id"])
     url = f"/api/v1/profiles/{profile['id']}/usage"
     assert (
         await client.post(url, headers=profile["_device_headers"], json=usage_payload())
     ).status_code == 201
-    assert (
-        await client.post(url, headers=profile["_device_headers"], json=usage_payload())
-    ).status_code == 409
+    retry = await client.post(url, headers=profile["_device_headers"], json=usage_payload())
+    assert retry.status_code == 200
+    assert retry.json()["result"] == "unchanged"
 
 
 @pytest.mark.asyncio
@@ -958,3 +986,278 @@ async def test_analysis_uses_mock(client, adult_session, monitoring_authorizatio
     assert result["anomaly_score"] is None
     assert result["risk_level"] == "NORMAL"
     assert result["model_version"] == "mock-v1"
+
+
+@pytest.mark.asyncio
+async def test_usage_newer_snapshot_replaces_and_historical_retry_is_idempotent(
+    client,
+    monitoring_authorization,
+):
+    profile = await create_profile(client)
+    await monitoring_authorization(profile["id"])
+    url = f"/api/v1/profiles/{profile['id']}/usage"
+    first = usage_payload()
+    newer = usage_payload(
+        snapshot_id="00000000-0000-0000-0000-000000000816",
+        captured_at="2026-08-15T21:00:00Z",
+        period_end_at="2026-08-15T20:00:00Z",
+        total_usage_minutes=300,
+        applications=[
+            {
+                "package_name": "com.example.app",
+                "app_name": "Ejemplo",
+                "category": None,
+                "usage_minutes": 100,
+            }
+        ],
+    )
+
+    assert (await client.post(url, headers=profile["_device_headers"], json=first)).status_code == 201
+    updated = await client.post(url, headers=profile["_device_headers"], json=newer)
+    retry = await client.post(url, headers=profile["_device_headers"], json=first)
+
+    assert updated.status_code == 200
+    assert updated.json()["result"] == "updated"
+    assert updated.json()["usage"]["total_usage_minutes"] == 300
+    assert retry.status_code == 200
+    assert retry.json()["result"] == "unchanged"
+    assert retry.json()["usage"]["total_usage_minutes"] == 300
+
+    stale = usage_payload(
+        snapshot_id="00000000-0000-0000-0000-000000000817",
+        captured_at="2026-08-15T20:30:00Z",
+    )
+    rejected = await client.post(url, headers=profile["_device_headers"], json=stale)
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "stale_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_usage_snapshot_id_cannot_be_reused_with_different_content(
+    client,
+    monitoring_authorization,
+):
+    profile = await create_profile(client)
+    await monitoring_authorization(profile["id"])
+    url = f"/api/v1/profiles/{profile['id']}/usage"
+    payload = usage_payload()
+    assert (await client.post(url, headers=profile["_device_headers"], json=payload)).status_code == 201
+    changed = {**payload, "total_usage_minutes": 231}
+    conflict = await client.post(url, headers=profile["_device_headers"], json=changed)
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "snapshot_conflict"
+
+
+@pytest.mark.asyncio
+async def test_new_null_metrics_replace_previous_values_without_merging(
+    client,
+    monitoring_authorization,
+):
+    profile = await create_profile(client)
+    await monitoring_authorization(profile["id"])
+    url = f"/api/v1/profiles/{profile['id']}/usage"
+    assert (await client.post(url, headers=profile["_device_headers"], json=usage_payload())).status_code == 201
+    unavailable = usage_payload(
+        snapshot_id="00000000-0000-0000-0000-000000000818",
+        captured_at="2026-08-15T21:00:00Z",
+        period_end_at="2026-08-15T20:00:00Z",
+        total_usage_minutes=None,
+        session_count=None,
+        night_usage_minutes=None,
+        max_session_minutes=None,
+        unlock_count=None,
+        applications=None,
+        metric_statuses={
+            "total_usage_minutes": "CAPTURE_ERROR",
+            "session_count": "CAPTURE_ERROR",
+            "night_usage_minutes": "CAPTURE_ERROR",
+            "max_session_minutes": "CAPTURE_ERROR",
+            "unlock_count": "CAPTURE_ERROR",
+            "applications": "CAPTURE_ERROR",
+        },
+        night_window=None,
+    )
+    response = await client.post(url, headers=profile["_device_headers"], json=unavailable)
+    usage = response.json()["usage"]
+    assert response.status_code == 200
+    assert usage["total_usage_minutes"] is None
+    assert usage["applications"] is None
+    assert usage["metric_statuses"]["total_usage_minutes"] == "CAPTURE_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_usage_multiple_devices_preserve_non_uniform_periods(
+    client,
+    monitoring_authorization,
+):
+    profile = await create_profile(client)
+    await monitoring_authorization(profile["id"])
+    url = f"/api/v1/profiles/{profile['id']}/usage"
+    first = await client.post(url, headers=profile["_device_headers"], json=usage_payload())
+    assert first.status_code == 201
+
+    link = await client.post(f"/api/v1/profiles/{profile['id']}/device-link-codes")
+    assert link.status_code == 201
+    claimed = await client.post(
+        "/api/v1/device-links/claim",
+        json={
+            "code": link.json()["code"],
+            "installation_id": f"second-{uuid.uuid4()}",
+            "platform": "ANDROID",
+        },
+    )
+    assert claimed.status_code == 200
+    second_headers = {"Authorization": f"Bearer {claimed.json()['access_token']}"}
+    second_payload = usage_payload(
+        snapshot_id="00000000-0000-0000-0000-000000000819",
+        captured_at="2026-08-15T18:00:00Z",
+        period_start_at="2026-08-15T08:00:00Z",
+        period_end_at="2026-08-15T17:00:00Z",
+        coverage_status="PARTIAL",
+        total_usage_minutes=30,
+        session_count=4,
+        night_usage_minutes=0,
+        max_session_minutes=10,
+        unlock_count=5,
+        applications=[
+            {
+                "package_name": "com.example.app",
+                "app_name": "Ejemplo",
+                "category": None,
+                "usage_minutes": 20,
+            }
+        ],
+    )
+    response = await client.post(url, headers=second_headers, json=second_payload)
+    usage = response.json()["usage"]
+
+    assert response.status_code == 200
+    assert usage["source_count"] == 2
+    assert usage["periods_uniform"] is False
+    assert usage["period_start_at"] is None
+    assert usage["period_end_at"] is None
+    assert len(usage["sources"]) == 2
+    assert sorted(source["total_usage_minutes"] for source in usage["sources"]) == [30, 230]
+    assert usage["coverage_status"] == "PARTIAL"
+    assert usage["total_usage_minutes"] == 260
+    assert usage["applications"][0]["usage_minutes"] == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("changes", "expected_fragment"),
+    [
+        ({"coverage_status": "COMPLETE"}, "coverage_status"),
+        ({"timezone": "Not/A_Zone"}, "timezone"),
+        ({"captured_at": "2026-08-15T18:00:00Z"}, "captured_at"),
+        (
+            {
+                "night_usage_minutes": None,
+                "metric_statuses": {
+                    "total_usage_minutes": "MEASURED",
+                    "session_count": "MEASURED",
+                    "night_usage_minutes": "MEASURED",
+                    "max_session_minutes": "MEASURED",
+                    "unlock_count": "MEASURED",
+                    "applications": "MEASURED",
+                },
+            },
+            "night_usage_minutes",
+        ),
+    ],
+)
+async def test_usage_contract_rejects_unsupported_coverage_and_inconsistent_metadata(
+    client,
+    monitoring_authorization,
+    changes,
+    expected_fragment,
+):
+    profile = await create_profile(client)
+    await monitoring_authorization(profile["id"])
+    response = await client.post(
+        f"/api/v1/profiles/{profile['id']}/usage",
+        headers=profile["_device_headers"],
+        json=usage_payload(**changes),
+    )
+    assert response.status_code == 422
+    assert expected_fragment in response.text
+
+
+@pytest.mark.asyncio
+async def test_usage_persists_iana_timezone_period_and_overnight_definition(
+    client,
+    monitoring_authorization,
+):
+    profile = await create_profile(client)
+    await monitoring_authorization(profile["id"])
+    payload = usage_payload(
+        snapshot_id="00000000-0000-0000-0000-000000001016",
+        date="2026-10-16",
+        period_start_at="2026-10-16T00:00:00-03:00",
+        period_end_at="2026-10-16T17:00:00-03:00",
+        captured_at="2026-10-16T20:30:00Z",
+        timezone="America/Argentina/Buenos_Aires",
+        calculation_version="android-collector-2.1",
+    )
+    response = await client.post(
+        f"/api/v1/profiles/{profile['id']}/usage",
+        headers=profile["_device_headers"],
+        json=payload,
+    )
+    usage = response.json()["usage"]
+    assert response.status_code == 201
+    assert usage["timezone"] == "America/Argentina/Buenos_Aires"
+    assert usage["sources"][0]["calculation_version"] == "android-collector-2.1"
+    assert usage["night_window"] == {
+        "source": "PROFILE_SLEEP_SCHEDULE",
+        "start_local_time": "22:00:00",
+        "end_local_time": "07:00:00",
+    }
+
+
+@pytest.mark.asyncio
+async def test_usage_history_supports_inclusive_date_filters(
+    client,
+    monitoring_authorization,
+):
+    profile = await create_profile(client)
+    await monitoring_authorization(profile["id"])
+    url = f"/api/v1/profiles/{profile['id']}/usage"
+    assert (await client.post(url, headers=profile["_device_headers"], json=usage_payload())).status_code == 201
+    second = usage_payload(
+        snapshot_id="00000000-0000-0000-0000-000000000816",
+        date="2026-08-16",
+        period_start_at="2026-08-16T00:00:00Z",
+        period_end_at="2026-08-16T19:00:00Z",
+        captured_at="2026-08-16T20:00:00Z",
+    )
+    assert (await client.post(url, headers=profile["_device_headers"], json=second)).status_code == 201
+    history = await client.get(f"{url}?date_from=2026-08-16&date_to=2026-08-16")
+    assert history.status_code == 200
+    assert [item["date"] for item in history.json()] == ["2026-08-16"]
+    assert (await client.get(f"{url}?date_from=2026-08-17&date_to=2026-08-16")).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_usage_snapshots_leave_newest_as_head(
+    client,
+    monitoring_authorization,
+):
+    profile = await create_profile(client)
+    await monitoring_authorization(profile["id"])
+    url = f"/api/v1/profiles/{profile['id']}/usage"
+    older = usage_payload()
+    newer = usage_payload(
+        snapshot_id="00000000-0000-0000-0000-000000000820",
+        captured_at="2026-08-15T21:00:00Z",
+        period_end_at="2026-08-15T20:00:00Z",
+        total_usage_minutes=310,
+    )
+    responses = await asyncio.gather(
+        client.post(url, headers=profile["_device_headers"], json=older),
+        client.post(url, headers=profile["_device_headers"], json=newer),
+    )
+    assert sorted(response.status_code for response in responses) == [200, 201]
+    current = await client.get(f"{url}/2026-08-15")
+    assert current.status_code == 200
+    assert current.json()["total_usage_minutes"] == 310

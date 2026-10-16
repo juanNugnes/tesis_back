@@ -142,6 +142,19 @@ class HistoricalSubmissionStatus(str, enum.Enum):
     TECHNICAL_ERROR = "TECHNICAL_ERROR"
 
 
+class UsageMetricStatus(str, enum.Enum):
+    MEASURED = "MEASURED"
+    UNAVAILABLE = "UNAVAILABLE"
+    PERMISSION_DENIED = "PERMISSION_DENIED"
+    CAPTURE_ERROR = "CAPTURE_ERROR"
+    INCOMPLETE = "INCOMPLETE"
+
+
+class UsageCoverageStatus(str, enum.Enum):
+    UNKNOWN = "UNKNOWN"
+    PARTIAL = "PARTIAL"
+
+
 class Profile(Base):
     __tablename__ = "profiles"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -666,12 +679,31 @@ class DailyUsage(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
     date: Mapped[date] = mapped_column(Date, index=True)
-    total_usage_minutes: Mapped[int] = mapped_column(Integer)
+    total_usage_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     session_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    night_usage_minutes: Mapped[int] = mapped_column(Integer)
+    night_usage_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_session_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     unlock_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_usage_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"), default=UsageMetricStatus.UNAVAILABLE)
+    session_count_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"), default=UsageMetricStatus.UNAVAILABLE)
+    night_usage_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"), default=UsageMetricStatus.UNAVAILABLE)
+    max_session_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"), default=UsageMetricStatus.UNAVAILABLE)
+    unlock_count_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"), default=UsageMetricStatus.UNAVAILABLE)
+    applications_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"), default=UsageMetricStatus.UNAVAILABLE)
+    applications_present: Mapped[bool] = mapped_column(Boolean, default=False)
+    coverage_status: Mapped[UsageCoverageStatus] = mapped_column(Enum(UsageCoverageStatus, name="usage_coverage_status"), default=UsageCoverageStatus.UNKNOWN)
+    period_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    period_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    timezone_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    duration_unit: Mapped[str] = mapped_column(String(16), default="MINUTES")
+    measurement_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    calculation_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    night_window_start: Mapped[time | None] = mapped_column(Time, nullable=True)
+    night_window_end: Mapped[time | None] = mapped_column(Time, nullable=True)
+    periods_uniform: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     profile: Mapped[Profile] = relationship(back_populates="daily_usages")
     applications: Mapped[list["AppUsage"]] = relationship(back_populates="daily_usage", cascade="all, delete-orphan", lazy="selectin")
 
@@ -685,6 +717,65 @@ class AppUsage(Base):
     category: Mapped[str | None] = mapped_column(String(80), nullable=True)
     usage_minutes: Mapped[int] = mapped_column(Integer)
     daily_usage: Mapped[DailyUsage] = relationship(back_populates="applications")
+
+
+class UsageSnapshot(Base):
+    __tablename__ = "usage_snapshots"
+    __table_args__ = (
+        Index("ix_usage_snapshots_profile_date", "profile_id", "date"),
+        Index("ix_usage_snapshots_device_date_captured", "device_id", "date", "captured_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    timezone_name: Mapped[str] = mapped_column(String(64))
+    duration_unit: Mapped[str] = mapped_column(String(16))
+    measurement_method: Mapped[str] = mapped_column(String(80))
+    calculation_version: Mapped[str] = mapped_column(String(80))
+    coverage_status: Mapped[UsageCoverageStatus] = mapped_column(Enum(UsageCoverageStatus, name="usage_coverage_status"))
+    total_usage_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    session_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    night_usage_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_session_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    unlock_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_usage_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"))
+    session_count_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"))
+    night_usage_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"))
+    max_session_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"))
+    unlock_count_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"))
+    applications_status: Mapped[UsageMetricStatus] = mapped_column(Enum(UsageMetricStatus, name="usage_metric_status"))
+    applications_present: Mapped[bool] = mapped_column(Boolean)
+    night_window_start: Mapped[time | None] = mapped_column(Time, nullable=True)
+    night_window_end: Mapped[time | None] = mapped_column(Time, nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    applications: Mapped[list["SnapshotAppUsage"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+
+
+class SnapshotAppUsage(Base):
+    __tablename__ = "snapshot_app_usages"
+    __table_args__ = (UniqueConstraint("snapshot_id", "package_name", name="uq_snapshot_app_usages_snapshot_package"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("usage_snapshots.id", ondelete="CASCADE"), index=True)
+    package_name: Mapped[str] = mapped_column(String(255))
+    app_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    usage_minutes: Mapped[int] = mapped_column(Integer)
+
+
+class DeviceDailyUsageHead(Base):
+    __tablename__ = "device_daily_usage_heads"
+    __table_args__ = (UniqueConstraint("device_id", "date", name="uq_device_daily_usage_heads_device_date"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("usage_snapshots.id", ondelete="CASCADE"), unique=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class AnalysisResult(Base):
