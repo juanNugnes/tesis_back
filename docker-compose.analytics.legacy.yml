@@ -1,0 +1,31 @@
+# Recuperacion de la configuracion anterior a 04f1e3a. Usar con docker-compose.yml.
+services:
+  analytics:
+    image: ${ANALYTICS_LEGACY_IMAGE:-modera-analytics:historical-candidate}
+    environment:
+      ANALYTICS_SERVICE_TOKEN: ${ANALYTICS_SERVICE_TOKEN:?Definir el token privado existente}
+      ANALYTICS_HOST: 0.0.0.0
+      ANALYTICS_PORT: "8765"
+      ANALYTICS_PMUM_ENABLED: "false"
+      ANALYTICS_ACTIVITIES_ENABLED: "true"
+      ANALYTICS_HISTORICAL_ENABLED: "true"
+      ANALYTICS_HISTORICAL_CONFIG_PATH: /config/historical.json
+      ANALYTICS_HISTORICAL_REPOSITORY_PATH: /var/lib/modera/historical/history.json
+    volumes:
+      - historical_state_smoke:/var/lib/modera/historical
+      - type: bind
+        source: C:/Users/Juan/Projects/modera-modelo/tests/fixtures/historical_c1_smoke_only.json
+        target: /config/historical.json
+        read_only: true
+    read_only: true
+    tmpfs: [/tmp]
+  backend:
+    depends_on:
+      db:
+        condition: service_healthy
+      analytics:
+        condition: service_started
+volumes:
+  historical_state_smoke:
+    external: true
+    name: ${ANALYTICS_LEGACY_VOLUME:-tesis_backend_historical_state_smoke}

@@ -17,6 +17,8 @@ La API queda disponible en `http://localhost:8000`, Swagger en `http://localhost
 
 ## Desarrollo local
 
+Para Analytics Docker `04f1e3a`, ver [configuracion, ensayo aislado y recuperacion](docs/analytics-docker-local.md).
+
 Requiere Python 3.11 o superior y una instancia de PostgreSQL.
 
 ```bash

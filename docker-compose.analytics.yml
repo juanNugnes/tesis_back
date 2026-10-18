@@ -1,9 +1,18 @@
 services:
   analytics:
-    image: modera-analytics:historical-candidate
+    image: ${ANALYTICS_IMAGE:-modera-analytics:04f1e3a}
+    build:
+      context: ${ANALYTICS_SOURCE_DIR:-C:/Users/Juan/Projects/modera-analytics-zip/MODERA_ANALYTICS_INTEGRACION_04f1e3a}
+      dockerfile: Dockerfile.analytics
+    restart: unless-stopped
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
     environment:
-      ANALYTICS_SERVICE_TOKEN: ${ANALYTICS_SERVICE_TOKEN}
+      ANALYTICS_SERVICE_TOKEN: ${ANALYTICS_SERVICE_TOKEN:?Definir el token privado compartido con el backend}
       ANALYTICS_HOST: 0.0.0.0
       ANALYTICS_PORT: "8765"
 
@@ -13,11 +22,17 @@ services:
 
       ANALYTICS_HISTORICAL_CONFIG_PATH: /config/historical.json
       ANALYTICS_HISTORICAL_REPOSITORY_PATH: /var/lib/modera/historical/history.json
+      ANALYTICS_ADULT_MESSAGES_ENABLED: "true"
+      ANALYTICS_ADULT_MESSAGES_REPOSITORY_PATH: /var/lib/modera/messages/messages.sqlite
+      ANALYTICS_CHILD_OFFERS_ENABLED: "true"
+      ANALYTICS_CHILD_OFFERS_REPOSITORY_PATH: /var/lib/modera/child-offers/coordinator.sqlite
 
     volumes:
       - historical_state_smoke:/var/lib/modera/historical
+      - analytics_messages:/var/lib/modera/messages
+      - analytics_child_offers:/var/lib/modera/child-offers
       - type: bind
-        source: C:/Users/Juan/Projects/modera-modelo/tests/fixtures/historical_c1_smoke_only.json
+        source: ${ANALYTICS_SOURCE_DIR:-C:/Users/Juan/Projects/modera-analytics-zip/MODERA_ANALYTICS_INTEGRACION_04f1e3a}/tests/fixtures/historical_c1_smoke_only.json
         target: /config/historical.json
         read_only: true
 
@@ -26,12 +41,35 @@ services:
     tmpfs:
       - /tmp
 
+  # Manual: solo primer uso de un volumen nuevo, o validacion de una base existente.
+  # Nunca ejecutar automaticamente para recrear una base perdida.
+  initialize-child-offers:
+    image: ${ANALYTICS_IMAGE:-modera-analytics:04f1e3a}
+    profiles: [tools]
+    user: "10001:10001"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - analytics_child_offers:/var/lib/modera/child-offers
+    command: [python, -m, analytics_service.initialize_child_offers, --path, /var/lib/modera/child-offers/coordinator.sqlite]
+    healthcheck:
+      disable: true
+
   backend:
     depends_on:
       db:
         condition: service_healthy
       analytics:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   historical_state_smoke:
+    external: true
+    # El original se conserva intacto; este volumen se restaura desde su respaldo.
+    name: tesis_backend_historical_state_smoke_04f1e3a
+  analytics_messages:
+    name: tesis_backend_analytics_messages_04f1e3a
+  analytics_child_offers:
+    name: tesis_backend_analytics_child_offers_04f1e3a
