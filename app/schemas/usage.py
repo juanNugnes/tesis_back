@@ -29,6 +29,7 @@ class UsageMetricStatuses(BaseModel):
     max_session_minutes: UsageMetricStatus
     unlock_count: UsageMetricStatus
     applications: UsageMetricStatus
+    last_night_activity_at: UsageMetricStatus = UsageMetricStatus.UNAVAILABLE
 
 
 class NightWindowDefinition(BaseModel):
@@ -76,15 +77,23 @@ class DailyUsageCreate(BaseModel):
     total_usage_minutes: int | None = Field(default=None, ge=0)
     session_count: int | None = Field(default=None, ge=0)
     night_usage_minutes: int | None = Field(default=None, ge=0)
+    last_night_activity_at: datetime | None = None
     max_session_minutes: int | None = Field(default=None, ge=0)
     unlock_count: int | None = Field(default=None, ge=0)
     applications: list[AppUsageCreate] | None = None
     metric_statuses: UsageMetricStatuses
     night_window: NightWindowDefinition | None = None
 
-    @field_validator("captured_at", "period_start_at", "period_end_at")
+    @field_validator(
+        "captured_at",
+        "period_start_at",
+        "period_end_at",
+        "last_night_activity_at",
+    )
     @classmethod
-    def require_timezone_aware_datetime(cls, value: datetime) -> datetime:
+    def require_timezone_aware_datetime(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("datetime must include a UTC offset")
         return value
@@ -120,6 +129,7 @@ class DailyUsageCreate(BaseModel):
             ("max_session_minutes", self.max_session_minutes),
             ("unlock_count", self.unlock_count),
             ("applications", self.applications),
+            ("last_night_activity_at", self.last_night_activity_at),
         )
         for name, value in metric_pairs:
             status = getattr(self.metric_statuses, name)
@@ -131,6 +141,25 @@ class DailyUsageCreate(BaseModel):
                 UsageMetricStatus.CAPTURE_ERROR,
             } and value is not None:
                 raise ValueError(f"{name} must be null when status is {status.value}")
+
+        last_activity_status = self.metric_statuses.last_night_activity_at
+        if last_activity_status != UsageMetricStatus.MEASURED and self.last_night_activity_at is not None:
+            raise ValueError("last_night_activity_at must be null unless status is MEASURED")
+        if self.last_night_activity_at is not None:
+            if self.night_window is None:
+                raise ValueError("night_window is required when last_night_activity_at has a value")
+            if not self.period_start_at <= self.last_night_activity_at < self.period_end_at:
+                raise ValueError("last_night_activity_at must be inside the measured period")
+            local_activity = self.last_night_activity_at.astimezone(zone).timetz().replace(tzinfo=None)
+            night_start = self.night_window.start_local_time
+            night_end = self.night_window.end_local_time
+            inside_night = (
+                night_start <= local_activity < night_end
+                if night_start < night_end
+                else local_activity >= night_start or local_activity < night_end
+            )
+            if not inside_night:
+                raise ValueError("last_night_activity_at must be inside night_window")
 
         if self.night_usage_minutes is not None and self.night_window is None:
             raise ValueError("night_window is required when night usage has a value")
@@ -167,6 +196,7 @@ class UsageSourceRead(BaseModel):
     total_usage_minutes: int | None
     session_count: int | None
     night_usage_minutes: int | None
+    last_night_activity_at: datetime | None
     max_session_minutes: int | None
     unlock_count: int | None
     applications: list[AppUsageCreate] | None
@@ -181,6 +211,7 @@ class DailyUsageRead(BaseModel):
     total_usage_minutes: int | None
     session_count: int | None
     night_usage_minutes: int | None
+    last_night_activity_at: datetime | None
     max_session_minutes: int | None
     unlock_count: int | None
     applications: list[AppUsageRead] | None

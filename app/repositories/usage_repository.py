@@ -82,11 +82,17 @@ class UsageRepository:
             total_usage_minutes=data.total_usage_minutes,
             session_count=data.session_count,
             night_usage_minutes=data.night_usage_minutes,
+            last_night_activity_at=(
+                data.last_night_activity_at.astimezone(timezone.utc)
+                if data.last_night_activity_at is not None
+                else None
+            ),
             max_session_minutes=data.max_session_minutes,
             unlock_count=data.unlock_count,
             total_usage_status=statuses.total_usage_minutes.value,
             session_count_status=statuses.session_count.value,
             night_usage_status=statuses.night_usage_minutes.value,
+            last_night_activity_status=statuses.last_night_activity_at.value,
             max_session_status=statuses.max_session_minutes.value,
             unlock_count_status=statuses.unlock_count.value,
             applications_status=statuses.applications.value,

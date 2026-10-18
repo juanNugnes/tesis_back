@@ -59,6 +59,12 @@ class ConsolidatedMetric:
     status: DbMetricStatus
 
 
+@dataclass(frozen=True)
+class ConsolidatedTimestamp:
+    value: datetime | None
+    status: DbMetricStatus
+
+
 def _enum_value(value):
     return value.value if hasattr(value, "value") else value
 
@@ -76,6 +82,23 @@ class UsageService:
     @staticmethod
     def _content_hash(data: DailyUsageCreate) -> str:
         canonical = data.model_dump(mode="json")
+        for field in ("captured_at", "period_start_at", "period_end_at"):
+            canonical[field] = _as_utc(getattr(data, field)).isoformat()
+        if data.last_night_activity_at is not None:
+            canonical["last_night_activity_at"] = _as_utc(data.last_night_activity_at).isoformat()
+        encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _legacy_content_hash(data: DailyUsageCreate) -> str | None:
+        if (
+            data.last_night_activity_at is not None
+            or data.metric_statuses.last_night_activity_at != UsageMetricStatus.UNAVAILABLE
+        ):
+            return None
+        canonical = data.model_dump(mode="json")
+        canonical.pop("last_night_activity_at", None)
+        canonical["metric_statuses"].pop("last_night_activity_at", None)
         for field in ("captured_at", "period_start_at", "period_end_at"):
             canonical[field] = _as_utc(getattr(data, field)).isoformat()
         encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
@@ -110,7 +133,8 @@ class UsageService:
                     and existing.device_id == device_id
                     and existing.date == data.date
                 )
-                if not same_owner or existing.content_hash != content_hash:
+                accepted_hashes = {content_hash, self._legacy_content_hash(data)} - {None}
+                if not same_owner or existing.content_hash not in accepted_hashes:
                     raise UsageConflictError(
                         "snapshot_conflict",
                         "snapshot_id was already used with different content or ownership",
@@ -165,12 +189,13 @@ class UsageService:
         except IntegrityError as exc:
             await self.repository.db.rollback()
             existing = await self.repository.get_snapshot(data.snapshot_id)
+            accepted_hashes = {content_hash, self._legacy_content_hash(data)} - {None}
             if (
                 existing is not None
                 and existing.profile_id == profile_id
                 and existing.device_id == device_id
                 and existing.date == data.date
-                and existing.content_hash == content_hash
+                and existing.content_hash in accepted_hashes
             ):
                 return UsageWriteResult(
                     result="unchanged",
@@ -203,6 +228,32 @@ class UsageService:
             value=aggregate(present_values) if present_values else None,
             status=status,
         )
+
+    @staticmethod
+    def _merge_last_night_activity(
+        snapshots: list[UsageSnapshot],
+        *,
+        compatible: bool,
+    ) -> ConsolidatedTimestamp:
+        if not snapshots:
+            return ConsolidatedTimestamp(None, DbMetricStatus.UNAVAILABLE)
+        statuses = [
+            DbMetricStatus(_enum_value(item.last_night_activity_status))
+            for item in snapshots
+        ]
+        if not compatible:
+            return ConsolidatedTimestamp(None, DbMetricStatus.INCOMPLETE)
+        if all(status == DbMetricStatus.MEASURED for status in statuses):
+            values = [item.last_night_activity_at for item in snapshots]
+            if any(value is None for value in values):
+                return ConsolidatedTimestamp(None, DbMetricStatus.INCOMPLETE)
+            return ConsolidatedTimestamp(
+                max(_as_utc(value) for value in values if value is not None),
+                DbMetricStatus.MEASURED,
+            )
+        if all(status == statuses[0] for status in statuses):
+            return ConsolidatedTimestamp(None, statuses[0])
+        return ConsolidatedTimestamp(None, DbMetricStatus.INCOMPLETE)
 
     async def _consolidate(self, daily: DailyUsage, snapshots: list[UsageSnapshot]) -> None:
         sums = (
@@ -298,6 +349,16 @@ class UsageService:
         else:
             daily.night_window_start = None
             daily.night_window_end = None
+        last_night_activity = self._merge_last_night_activity(
+            snapshots,
+            compatible=(
+                daily.periods_uniform
+                and len(night_signatures) == 1
+                and len(method_signatures) == 1
+            ),
+        )
+        daily.last_night_activity_at = last_night_activity.value
+        daily.last_night_activity_status = last_night_activity.status
         daily.duration_unit = "MINUTES"
         daily.coverage_status = (
             DbCoverageStatus.PARTIAL
@@ -340,6 +401,9 @@ class UsageService:
             total_usage_minutes=UsageMetricStatus(_enum_value(item.total_usage_status)),
             session_count=UsageMetricStatus(_enum_value(item.session_count_status)),
             night_usage_minutes=UsageMetricStatus(_enum_value(item.night_usage_status)),
+            last_night_activity_at=UsageMetricStatus(
+                _enum_value(item.last_night_activity_status)
+            ),
             max_session_minutes=UsageMetricStatus(_enum_value(item.max_session_status)),
             unlock_count=UsageMetricStatus(_enum_value(item.unlock_count_status)),
             applications=UsageMetricStatus(_enum_value(item.applications_status)),
@@ -368,6 +432,11 @@ class UsageService:
             total_usage_minutes=snapshot.total_usage_minutes,
             session_count=snapshot.session_count,
             night_usage_minutes=snapshot.night_usage_minutes,
+            last_night_activity_at=(
+                _as_utc(snapshot.last_night_activity_at)
+                if snapshot.last_night_activity_at
+                else None
+            ),
             max_session_minutes=snapshot.max_session_minutes,
             unlock_count=snapshot.unlock_count,
             applications=(
@@ -406,6 +475,11 @@ class UsageService:
             total_usage_minutes=daily.total_usage_minutes,
             session_count=daily.session_count,
             night_usage_minutes=daily.night_usage_minutes,
+            last_night_activity_at=(
+                _as_utc(daily.last_night_activity_at)
+                if daily.last_night_activity_at
+                else None
+            ),
             max_session_minutes=daily.max_session_minutes,
             unlock_count=daily.unlock_count,
             applications=applications,
