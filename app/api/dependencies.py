@@ -32,6 +32,7 @@ from app.services.otp_delivery_service import (
     OtpDeliveryService,
     SesOtpDeliveryService,
 )
+from app.services.otp_rate_limiter import OtpRateLimiter
 
 adult_bearer = HTTPBearer(auto_error=False, scheme_name="AdultBearer")
 device_bearer = HTTPBearer(auto_error=False, scheme_name="DeviceBearer")
@@ -84,6 +85,7 @@ async def get_adult_auth_service(
         settings.adult_otp_ttl_minutes,
         settings.adult_otp_max_attempts,
         delivery,
+        OtpRateLimiter(db, secret, settings),
         expose_dev_otp=(
             settings.environment == "development"
             and settings.otp_email_provider == "development"

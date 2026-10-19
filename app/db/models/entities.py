@@ -476,6 +476,18 @@ class AdultOtpChallenge(Base):
     adult: Mapped[AdultAccount] = relationship(back_populates="otp_challenges")
 
 
+class OtpRateLimitEvent(Base):
+    __tablename__ = "otp_rate_limit_events"
+    __table_args__ = (
+        Index("ix_otp_rate_limit_events_lookup", "scope", "key_hash", "occurred_at"),
+        Index("ix_otp_rate_limit_events_occurred_at", "occurred_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    scope: Mapped[str] = mapped_column(String(32))
+    key_hash: Mapped[str] = mapped_column(String(64))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Device(Base):
     __tablename__ = "devices"
     __table_args__ = (UniqueConstraint("installation_id", name="uq_devices_installation_id"),)

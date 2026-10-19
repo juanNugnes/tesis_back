@@ -29,13 +29,16 @@ async def create_profile(client, payload=None):
         headers=device_headers,
     )
     assert link_code.status_code == 201
-    email = "functional-tests@example.com"
-    requested = await client.post("/api/v1/auth/adult/otp/request", json={"email": email})
-    verified = await client.post(
-        "/api/v1/auth/adult/otp/verify",
-        json={"email": email, "code": requested.json()["dev_code"]},
-    )
-    adult_headers = {"Authorization": f"Bearer {verified.json()['access_token']}"}
+    if "Authorization" in client.headers:
+        adult_headers = {"Authorization": client.headers["Authorization"]}
+    else:
+        email = "functional-tests@example.com"
+        requested = await client.post("/api/v1/auth/adult/otp/request", json={"email": email})
+        verified = await client.post(
+            "/api/v1/auth/adult/otp/verify",
+            json={"email": email, "code": requested.json()["dev_code"]},
+        )
+        adult_headers = {"Authorization": f"Bearer {verified.json()['access_token']}"}
     claimed = await client.post(
         "/api/v1/adult/profile-links/claim",
         headers=adult_headers,

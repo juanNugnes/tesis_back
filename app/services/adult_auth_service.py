@@ -14,6 +14,7 @@ from app.repositories.adult_account_repository import AdultAccountRepository
 from app.repositories.adult_otp_repository import AdultOtpRepository
 from app.schemas.adult_auth import normalize_email
 from app.services.otp_delivery_service import OtpDeliveryService
+from app.services.otp_rate_limiter import OtpRateLimiter
 
 
 class InvalidOtpError(Exception):
@@ -51,6 +52,7 @@ class AdultAuthService:
         otp_ttl_minutes: int,
         otp_max_attempts: int,
         delivery: OtpDeliveryService,
+        rate_limiter: OtpRateLimiter,
         *,
         expose_dev_otp: bool = False,
     ):
@@ -60,12 +62,14 @@ class AdultAuthService:
         self.otp_ttl = timedelta(minutes=otp_ttl_minutes)
         self.otp_max_attempts = otp_max_attempts
         self.delivery = delivery
+        self.rate_limiter = rate_limiter
         self.expose_dev_otp = expose_dev_otp
         self.adults = AdultAccountRepository(db)
         self.challenges = AdultOtpRepository(db)
 
-    async def request_otp(self, email: str) -> OtpRequestResult:
+    async def request_otp(self, email: str, client_ip: str) -> OtpRequestResult:
         normalized_email = normalize_email(email)
+        await self.rate_limiter.enforce("request", normalized_email, client_ip)
         adult = await self.adults.get_by_email(normalized_email)
         if adult is None:
             try:
@@ -97,8 +101,9 @@ class AdultAuthService:
             raise
         return OtpRequestResult(dev_code=code if self.expose_dev_otp else None)
 
-    async def verify_otp(self, email: str, code: str) -> AdultTokenResult:
+    async def verify_otp(self, email: str, code: str, client_ip: str) -> AdultTokenResult:
         normalized_email = normalize_email(email)
+        await self.rate_limiter.enforce("verify", normalized_email, client_ip)
         now = datetime.now(timezone.utc)
         adult = await self.adults.get_by_email(normalized_email)
         if adult is None or not adult.active:

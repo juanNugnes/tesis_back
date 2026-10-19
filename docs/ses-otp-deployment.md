@@ -1,5 +1,26 @@
 # OTP por Amazon SES
 
+Antes de publicar los endpoints OTP, aplicar Alembic `20261019_0016`. La migración
+agrega `otp_rate_limit_events`: guarda sólo HMAC de correo/IP y hora, sin modificar
+los desafíos existentes. El backend aplica 3 solicitudes por correo y 10 por IP
+en 15 minutos, con 60 segundos de espera por correo. La verificación admite
+10 intentos por correo y 30 por IP en 15 minutos, además del máximo existente
+por desafío. Los rechazos devuelven 429 y `Retry-After` en segundos. Los eventos
+expirados se purgan al procesar una solicitud admitida.
+
+Variables opcionales: `OTP_RATE_WINDOW_MINUTES`, `OTP_REQUEST_EMAIL_LIMIT`,
+`OTP_REQUEST_IP_LIMIT`, `OTP_REQUEST_COOLDOWN_SECONDS`,
+`OTP_VERIFY_EMAIL_LIMIT` y `OTP_VERIFY_IP_LIMIT`. Mantener los mismos valores
+en todas las instancias.
+
+El contenedor inicia Uvicorn con `--no-proxy-headers` para conservar la IP del
+peer TCP. Configurar `OTP_TRUSTED_PROXY_CIDRS` con la IP exacta de Caddy que
+conecta al backend (por ejemplo, una dirección `/32`); el backend sólo entonces
+considera `X-Forwarded-For` y elige el último salto no confiable. Mantener el
+puerto de backend inaccesible desde Internet y asegurar que Caddy sanee las
+cabeceras recibidas. Sin proxies confiables configurados se limita la IP de
+Caddy como una sola fuente; probar esta configuración antes de abrir la API.
+
 El backend selecciona el proveedor con `OTP_EMAIL_PROVIDER`. En producción debe ser
 `ses`; `development` sólo funciona con `ENVIRONMENT=development` y descarta el correo.
 La ausencia de proveedor o remitente impide solicitar OTP (HTTP 503). `EXPOSE_DEV_OTP`

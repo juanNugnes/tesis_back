@@ -58,8 +58,11 @@ async def test_request_otp_normalizes_email_hashes_code_and_is_generic(client, d
     assert challenge.code_hash != body["dev_code"]
     assert len(challenge.code_hash) == 64
 
-    repeated = await request_otp(client, "adulto@example.com")
-    assert repeated.json()["message"] == body["message"]
+    repeated = await client.post(
+        "/api/v1/auth/adult/otp/request", json={"email": "adulto@example.com"}
+    )
+    assert repeated.status_code == 429
+    assert 1 <= int(repeated.headers["Retry-After"]) <= 60
     adults = list((await db_session.execute(select(AdultAccount))).scalars().all())
     assert len(adults) == 1
 

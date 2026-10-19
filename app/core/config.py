@@ -1,7 +1,8 @@
 from functools import lru_cache
+from ipaddress import ip_network
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,13 @@ class Settings(BaseSettings):
     adult_auth_jwt_exp_minutes: int = Field(default=60, gt=0)
     adult_otp_ttl_minutes: int = Field(default=10, gt=0)
     adult_otp_max_attempts: int = Field(default=5, gt=0)
+    otp_rate_window_minutes: int = Field(default=15, gt=0)
+    otp_request_email_limit: int = Field(default=3, gt=0)
+    otp_request_ip_limit: int = Field(default=10, gt=0)
+    otp_request_cooldown_seconds: int = Field(default=60, gt=0)
+    otp_verify_email_limit: int = Field(default=10, gt=0)
+    otp_verify_ip_limit: int = Field(default=30, gt=0)
+    otp_trusted_proxy_cidrs: str = ""
     expose_dev_otp: bool = False
     otp_email_provider: Literal["development", "ses"] | None = None
     ses_region: str = "us-east-1"
@@ -29,6 +37,14 @@ class Settings(BaseSettings):
     analytics_service_url: str = "http://analytics:8765"
     analytics_service_token: SecretStr | None = None
     analytics_timeout_seconds: float = Field(default=5.0, gt=0)
+
+    @field_validator("otp_trusted_proxy_cidrs")
+    @classmethod
+    def validate_otp_trusted_proxy_cidrs(cls, value: str) -> str:
+        for part in value.split(","):
+            if part.strip():
+                ip_network(part.strip(), strict=False)
+        return value
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
