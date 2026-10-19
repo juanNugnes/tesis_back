@@ -27,7 +27,11 @@ from app.services.adult_profile_service import AdultProfileService
 from app.services.device_auth_service import DeviceAuthService
 from app.services.device_bootstrap_service import DeviceBootstrapService
 from app.services.monitoring_authorization_service import MonitoringAuthorizationService
-from app.services.otp_delivery_service import DevelopmentOtpDeliveryService, OtpDeliveryService
+from app.services.otp_delivery_service import (
+    DevelopmentOtpDeliveryService,
+    OtpDeliveryService,
+    SesOtpDeliveryService,
+)
 
 adult_bearer = HTTPBearer(auto_error=False, scheme_name="AdultBearer")
 device_bearer = HTTPBearer(auto_error=False, scheme_name="DeviceBearer")
@@ -42,7 +46,19 @@ async def get_profile(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db))
 
 
 def get_otp_delivery_service() -> OtpDeliveryService:
-    return DevelopmentOtpDeliveryService()
+    settings = get_settings()
+    if settings.otp_email_provider == "ses":
+        if not settings.ses_sender_email:
+            raise HTTPException(status_code=503, detail="OTP delivery is not configured")
+        try:
+            return SesOtpDeliveryService(
+                settings.ses_sender_email, settings.ses_region, settings.ses_timeout_seconds
+            )
+        except Exception:
+            raise HTTPException(status_code=503, detail="OTP delivery is unavailable") from None
+    if settings.otp_email_provider == "development" and settings.environment == "development":
+        return DevelopmentOtpDeliveryService()
+    raise HTTPException(status_code=503, detail="OTP delivery is not configured")
 
 
 async def get_adult_auth_service(
@@ -68,7 +84,11 @@ async def get_adult_auth_service(
         settings.adult_otp_ttl_minutes,
         settings.adult_otp_max_attempts,
         delivery,
-        expose_dev_otp=settings.environment == "development" and settings.expose_dev_otp,
+        expose_dev_otp=(
+            settings.environment == "development"
+            and settings.otp_email_provider == "development"
+            and settings.expose_dev_otp
+        ),
     )
 
 

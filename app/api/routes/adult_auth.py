@@ -10,6 +10,7 @@ from app.schemas.adult_auth import (
     AdultRead,
 )
 from app.services.adult_auth_service import AdultAuthService, InvalidOtpError
+from app.services.otp_delivery_service import OtpDeliveryError
 
 router = APIRouter(tags=["adult auth"])
 
@@ -26,7 +27,13 @@ async def request_adult_otp(
     data: AdultOtpRequest,
     service: AdultAuthService = Depends(get_adult_auth_service),
 ):
-    result = await service.request_otp(data.email)
+    try:
+        result = await service.request_otp(data.email)
+    except OtpDeliveryError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Verification email temporarily unavailable",
+        ) from None
     return AdultOtpRequestResponse(message=OTP_ACCEPTED_MESSAGE, dev_code=result.dev_code)
 
 

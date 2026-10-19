@@ -1,0 +1,42 @@
+# OTP por Amazon SES
+
+El backend selecciona el proveedor con `OTP_EMAIL_PROVIDER`. En producción debe ser
+`ses`; `development` sólo funciona con `ENVIRONMENT=development` y descarta el correo.
+La ausencia de proveedor o remitente impide solicitar OTP (HTTP 503). `EXPOSE_DEV_OTP`
+debe permanecer en `false` en producción. La respuesta de producción nunca contiene
+el código. Los vencimientos y el máximo de intentos siguen siendo los configurados
+por `ADULT_OTP_TTL_MINUTES` y `ADULT_OTP_MAX_ATTEMPTS`.
+
+Variables para producción:
+
+```
+ENVIRONMENT=production
+OTP_EMAIL_PROVIDER=ses
+SES_REGION=us-east-1
+SES_SENDER_EMAIL=verificado@dominio.example
+SES_TIMEOUT_SECONDS=5
+EXPOSE_DEV_OTP=false
+```
+
+Crear una identidad verificada de correo o dominio en Amazon SES en `us-east-1`,
+completar la verificación y configurar DKIM si se usa un dominio. Mientras la cuenta
+esté en el sandbox de SES, también deben estar verificados los destinatarios; solicitar
+acceso de producción en SES antes de admitir correos arbitrarios.
+
+Adjuntar al rol de la instancia EC2 una política IAM que permita únicamente
+`ses:SendEmail` sobre el ARN de la identidad verificada en `us-east-1`.
+Ejemplo de recurso: `arn:aws:ses:us-east-1:<account-id>:identity/dominio.example`.
+No configurar access keys permanentes: boto3 usa la cadena de credenciales de AWS,
+incluido el rol de instancia. Limitar salida HTTPS a SES según la red de despliegue.
+
+Despliegue seguro: verificar identidad, región, salida de red, rol y acceso de
+producción de SES; cargar las variables en el entorno protegido de EC2; construir la
+imagen con `boto3` incluido; desplegar sólo el backend tras aprobar el cambio. Mantener
+el endpoint OTP detrás del HTTPS y los controles de acceso y tasa previstos antes de
+publicarlo en Caddy. Validar primero con una cuenta adulta de prueba autorizada y
+revisar métricas de SES sin registrar códigos ni contenido del mensaje. Si SES falla o
+agota el timeout, la API responde 503 genérico y no confirma el desafío OTP.
+
+Referencias: [identidades verificadas](https://docs.aws.amazon.com/ses/latest/dg/verify-addresses-and-domains.html),
+[restricciones del sandbox](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html),
+[permisos IAM](https://docs.aws.amazon.com/ses/latest/dg/control-user-access.html).
