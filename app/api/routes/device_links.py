@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,7 @@ from app.api.dependencies import (
     require_device_profile_access,
     require_profile_access,
 )
+from app.api.link_rate_limits import enforce_link_rate
 from app.core.config import get_settings
 from app.db.models import Profile
 from app.db.session import get_db
@@ -103,9 +104,15 @@ async def register_device(
     description="Requires an adult Bearer token with an active link to the requested Profile.",
 )
 async def create_device_link_code(
+    request: Request,
     profile: Profile = Depends(require_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
+    settings = get_settings()
+    await enforce_link_rate(
+        db, request, "device_code_ip", settings.link_code_issue_ip_limit,
+        (("device_code_profile", str(profile.id), settings.link_code_issue_profile_limit),),
+    )
     try:
         return await link_service(db).generate(profile)
     except InactiveProfileError:
@@ -126,9 +133,15 @@ async def create_device_link_code(
     ),
 )
 async def create_adult_profile_link_code(
+    request: Request,
     profile: Profile = Depends(require_device_profile_access),
     db: AsyncSession = Depends(get_db),
 ):
+    settings = get_settings()
+    await enforce_link_rate(
+        db, request, "adult_code_ip", settings.link_code_issue_ip_limit,
+        (("adult_code_profile", str(profile.id), settings.link_code_issue_profile_limit),),
+    )
     try:
         return await link_service(db).generate_adult_profile_link_code(profile)
     except InactiveProfileError:
@@ -147,9 +160,13 @@ async def create_adult_profile_link_code(
 )
 async def claim_device_link(
     data: DeviceLinkClaimRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     device_auth: DeviceAuthService = Depends(get_device_auth_service),
 ):
+    await enforce_link_rate(
+        db, request, "device_claim_ip", get_settings().link_claim_ip_limit
+    )
     try:
         device, profile = await link_service(db).claim(data)
     except InvalidLinkCodeError:

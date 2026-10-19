@@ -1,12 +1,14 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
     get_device_bootstrap_service,
     require_profile_principal_access,
 )
+from app.api.link_rate_limits import enforce_link_rate
+from app.core.config import get_settings
 from app.db.models import Profile
 from app.db.session import get_db
 from app.repositories.profile_repository import ProfileRepository
@@ -20,8 +22,13 @@ router = APIRouter(prefix="/profiles", tags=["profiles"])
 @router.post("", response_model=ProfileBootstrapRead, status_code=status.HTTP_201_CREATED)
 async def create_profile(
     data: ProfileCreate,
+    request: Request,
     service: DeviceBootstrapService = Depends(get_device_bootstrap_service),
+    db: AsyncSession = Depends(get_db),
 ):
+    await enforce_link_rate(
+        db, request, "profile_create_ip", get_settings().profile_create_ip_limit
+    )
     try:
         result = await service.create_profile(data)
     except BootstrapGenerationError:

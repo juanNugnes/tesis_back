@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_adult
+from app.api.link_rate_limits import enforce_link_rate
 from app.core.config import get_settings
 from app.db.models import AdultAccount
 from app.db.session import get_db
@@ -35,9 +36,15 @@ def link_service(db: AsyncSession) -> ProfileLinkService:
 @router.post("/claim", response_model=AdultProfileLinkClaimResponse)
 async def claim_adult_profile_link(
     data: AdultProfileLinkClaimRequest,
+    request: Request,
     current_adult: AdultAccount = Depends(get_current_adult),
     db: AsyncSession = Depends(get_db),
 ):
+    settings = get_settings()
+    await enforce_link_rate(
+        db, request, "adult_claim_ip", settings.link_claim_ip_limit,
+        (("adult_claim_adult", str(current_adult.id), settings.link_claim_adult_limit),),
+    )
     try:
         adult_link, profile = await link_service(db).claim_adult_profile_link(
             current_adult,

@@ -672,7 +672,22 @@ supresion deliberada del perfil.
 
 Android debe conservar `bootstrap_token` al crear el Profile, enviarlo como Bearer al registrar el primer Device y reemplazarlo por el `access_token` Device devuelto. Tambien debe guardar el token nuevo recibido por `/device-links/claim`, enviar `DeviceBearer` en Usage, Profile, Settings, ActivityPreferences y generacion de `adult-link-codes`, y borrar o renovar la credencial cuando el backend responda `401`.
 
-No hay refresh token Device en esta etapa. La renovacion requiere un nuevo `DEVICE_LINK`; siguen pendientes una estrategia de refresh/rotacion, limpieza de Profiles huerfanos, UI de revocacion, rate limiting, almacenamiento seguro en Android y hardening productivo.
+No hay refresh token Device en esta etapa. La renovacion requiere un nuevo `DEVICE_LINK`; siguen pendientes una estrategia de refresh/rotacion, limpieza de Profiles huerfanos, UI de revocacion, almacenamiento seguro en Android y hardening productivo.
+
+### Limites de alta y vinculacion
+
+PostgreSQL conserva los intentos en `otp_rate_limit_events` (la misma tabla usada por OTP).
+El canje de codigos, la emision de codigos y el alta publica de perfiles devuelven
+`429` con `Retry-After` en segundos al superar el cupo. Tambien se contabilizan los
+canjes con codigo incorrecto; los codigos y credenciales no se guardan en esa tabla.
+La ventana predeterminada es de 15 minutos. `LINK_CLAIM_IP_LIMIT=10` aplica por IP
+a cada tipo de canje; `LINK_CLAIM_ADULT_LIMIT=5` aplica ademas a cada cuenta adulta.
+`LINK_CODE_ISSUE_PROFILE_LIMIT=5` limita cada tipo de codigo por perfil,
+`LINK_CODE_ISSUE_IP_LIMIT=20` por IP y `PROFILE_CREATE_IP_LIMIT=10` el alta por IP.
+`LINK_RATE_WINDOW_MINUTES` permite cambiar la ventana. La IP usa la misma politica
+de proxies confiables que OTP (`OTP_TRUSTED_PROXY_CIDRS`); en AWS hay que configurar
+el peer real de Caddy y no exponer directamente el puerto del backend.
+Android no necesita cambiar payloads ni rutas; debe respetar `Retry-After` si recibe 429.
 
 Siguen pendientes una estrategia de refresh/rotacion, acceso/rectificacion/supresion, retencion automatica, exportacion, identidad administrativa y una auditoria legal completa.
 

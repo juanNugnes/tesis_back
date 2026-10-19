@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     otp_request_cooldown_seconds: int = Field(default=60, gt=0)
     otp_verify_email_limit: int = Field(default=10, gt=0)
     otp_verify_ip_limit: int = Field(default=30, gt=0)
+    link_rate_window_minutes: int = Field(default=15, gt=0)
+    link_claim_ip_limit: int = Field(default=10, gt=0)
+    link_claim_adult_limit: int = Field(default=5, gt=0)
+    link_code_issue_profile_limit: int = Field(default=5, gt=0)
+    link_code_issue_ip_limit: int = Field(default=20, gt=0)
+    profile_create_ip_limit: int = Field(default=10, gt=0)
     otp_trusted_proxy_cidrs: str = ""
     expose_dev_otp: bool = False
     otp_email_provider: Literal["development", "ses"] | None = None
