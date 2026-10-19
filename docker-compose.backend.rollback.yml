@@ -1,0 +1,6 @@
+# Recuperacion manual: no ejecutar migraciones de la imagen anterior sobre DB 0015.
+# Revisar/aprobar antes de usar; no modifica PostgreSQL ni Analytics.
+services:
+  backend:
+    image: tesis_backend-backend:rollback-before-adult-messages
+    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, "8000"]

@@ -18,6 +18,7 @@ La API queda disponible en `http://localhost:8000`, Swagger en `http://localhost
 ## Desarrollo local
 
 Para Analytics Docker `04f1e3a`, ver [configuracion, ensayo aislado y recuperacion](docs/analytics-docker-local.md).
+El backend local con mensajes adultos y Alembic `0015` esta documentado en [despliegue y respaldo verificado](docs/backend-local-deployment.md).
 
 Requiere Python 3.11 o superior y una instancia de PostgreSQL.
 
@@ -61,6 +62,7 @@ Las pruebas usan una base SQLite temporal y cubren creación/validación de perf
 - `POST /api/v1/auth/adult/otp/verify`
 - `GET /api/v1/auth/adult/me`
 - `GET /api/v1/adult/profiles`
+- `GET /api/v1/profiles/{profile_id}/adult-messages/history` (AdultBearer, vinculo y representante verificado; [contrato y pendientes](docs/adult-messages-backend.md))
 - `GET /api/v1/profiles/{profile_id}/representative-verification`
 - `POST /api/v1/profiles/{profile_id}/consents`
 - `GET /api/v1/profiles/{profile_id}/consents/current`
