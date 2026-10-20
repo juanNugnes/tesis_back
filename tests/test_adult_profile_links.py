@@ -81,11 +81,16 @@ async def get_stored_code(db_session, profile_id, purpose="ADULT_PROFILE_LINK"):
     )
 
 
-def set_auto_approval(monkeypatch, enabled):
+def set_auto_approval(monkeypatch, enabled, email="auto-approve@example.com"):
     monkeypatch.setattr(
         get_settings(),
         "auto_approve_representative_verification",
         enabled,
+    )
+    monkeypatch.setattr(
+        get_settings(),
+        "auto_approve_representative_email_allowlist",
+        f"{email},second-test@example.com",
     )
 
 
@@ -459,7 +464,7 @@ async def test_enabled_flag_auto_approves_after_claim_and_audits_without_consent
     assert verification is not None
     assert verification.status == RepresentativeVerificationStatus.APPROVED
     assert verification.verified_at is not None
-    assert verification.verified_by == "automatic-mvp"
+    assert verification.verified_by == "automatic-mvp-allowlist"
     approval_events = await db_session.scalar(
         select(func.count())
         .select_from(AuditEvent)
@@ -478,7 +483,7 @@ async def test_enabled_flag_auto_approves_after_claim_and_audits_without_consent
     )
     assert approval_events == 1
     assert event is not None
-    assert event.event_metadata == {"verified_by": "automatic-mvp"}
+    assert event.event_metadata == {"verified_by": "automatic-mvp-allowlist"}
     assert await db_session.scalar(select(func.count()).select_from(Consent)) == 0
     granted = await client.post(
         f"/api/v1/profiles/{profile['id']}/consents",
@@ -497,7 +502,7 @@ async def test_enabled_flag_promotes_existing_pending_without_duplicate(
     db_session,
     monkeypatch,
 ):
-    set_auto_approval(monkeypatch, True)
+    set_auto_approval(monkeypatch, True, "pending-auto@example.com")
     profile_data = await create_profile(client)
     code = await generate_adult_link_code(client, profile_data["id"])
     headers, adult = await authenticate(client, db_session, "pending-auto@example.com")
@@ -526,7 +531,7 @@ async def test_enabled_flag_promotes_existing_pending_without_duplicate(
     verification = await db_session.get(RepresentativeVerification, pending_id)
     assert verification is not None
     assert verification.status == RepresentativeVerificationStatus.APPROVED
-    assert verification.verified_by == "automatic-mvp"
+    assert verification.verified_by == "automatic-mvp-allowlist"
     count = await db_session.scalar(
         select(func.count())
         .select_from(RepresentativeVerification)
@@ -544,7 +549,7 @@ async def test_enabled_flag_never_overwrites_rejected_verification(
     db_session,
     monkeypatch,
 ):
-    set_auto_approval(monkeypatch, True)
+    set_auto_approval(monkeypatch, True, "rejected-auto@example.com")
     profile_data = await create_profile(client)
     code = await generate_adult_link_code(client, profile_data["id"])
     headers, adult = await authenticate(client, db_session, "rejected-auto@example.com")
@@ -584,6 +589,31 @@ async def test_enabled_flag_never_overwrites_rejected_verification(
 
 
 @pytest.mark.asyncio
+async def test_enabled_flag_does_not_approve_email_outside_allowlist_after_claim(
+    client, db_session, monkeypatch,
+):
+    set_auto_approval(monkeypatch, True, "allowed@example.com")
+    profile = await create_profile(client)
+    code = await generate_adult_link_code(client, profile["id"])
+    headers, adult = await authenticate(client, db_session, "outside@example.com")
+
+    response = await client.post(
+        "/api/v1/adult/profile-links/claim", headers=headers, json={"code": code["code"]},
+    )
+
+    assert response.status_code == 200
+    verification = await db_session.scalar(select(RepresentativeVerification).where(
+        RepresentativeVerification.adult_id == adult.id,
+        RepresentativeVerification.profile_id == uuid.UUID(profile["id"]),
+    ))
+    assert verification is not None
+    assert verification.status == RepresentativeVerificationStatus.PENDING
+    assert await db_session.scalar(select(func.count()).select_from(AuditEvent).where(
+        AuditEvent.event_type == AuditEventType.REPRESENTATIVE_VERIFICATION_APPROVED,
+    )) == 0
+
+
+@pytest.mark.asyncio
 async def test_disabled_flag_preserves_pending_manual_flow(
     client,
     db_session,
@@ -619,7 +649,7 @@ async def test_otp_and_device_link_do_not_trigger_auto_approval(
     db_session,
     monkeypatch,
 ):
-    set_auto_approval(monkeypatch, True)
+    set_auto_approval(monkeypatch, True, "non-trigger@example.com")
     headers, adult = await authenticate(client, db_session, "non-trigger@example.com")
     assert await db_session.scalar(
         select(func.count()).select_from(RepresentativeVerification)

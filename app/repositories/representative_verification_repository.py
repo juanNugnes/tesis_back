@@ -26,6 +26,18 @@ class RepresentativeVerificationRepository:
             )
         )
 
+    async def get_by_adult_profile_for_update(
+        self,
+        adult_id: uuid.UUID,
+        profile_id: uuid.UUID,
+    ) -> RepresentativeVerification | None:
+        return await self.db.scalar(
+            select(RepresentativeVerification).where(
+                RepresentativeVerification.adult_id == adult_id,
+                RepresentativeVerification.profile_id == profile_id,
+            ).with_for_update()
+        )
+
     async def create_pending(
         self,
         adult_id: uuid.UUID,

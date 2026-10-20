@@ -9,12 +9,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import AdultAccessTokenCodec, InvalidAccessTokenError
-from app.db.models import AdultAccount, AdultOtpChallenge
+from app.db.models import AdultAccount, AdultOtpChallenge, RepresentativeVerificationStatus
 from app.repositories.adult_account_repository import AdultAccountRepository
 from app.repositories.adult_otp_repository import AdultOtpRepository
+from app.repositories.adult_profile_link_repository import AdultProfileLinkRepository
+from app.repositories.representative_verification_repository import RepresentativeVerificationRepository
 from app.schemas.adult_auth import normalize_email
 from app.services.otp_delivery_service import OtpDeliveryService
 from app.services.otp_rate_limiter import OtpRateLimiter
+from app.services.representative_auto_approval import auto_approval_allowed
+from app.services.representative_verification_service import RepresentativeVerificationService
 
 
 class InvalidOtpError(Exception):
@@ -55,6 +59,8 @@ class AdultAuthService:
         rate_limiter: OtpRateLimiter,
         *,
         expose_dev_otp: bool = False,
+        auto_approve_representative_verification: bool = False,
+        auto_approve_representative_email_allowlist: str = "",
     ):
         self.db = db
         self.hash_secret = jwt_secret.encode("utf-8")
@@ -64,8 +70,13 @@ class AdultAuthService:
         self.delivery = delivery
         self.rate_limiter = rate_limiter
         self.expose_dev_otp = expose_dev_otp
+        self.auto_approve_representative_verification = auto_approve_representative_verification
+        self.auto_approve_representative_email_allowlist = auto_approve_representative_email_allowlist
         self.adults = AdultAccountRepository(db)
         self.challenges = AdultOtpRepository(db)
+        self.links = AdultProfileLinkRepository(db)
+        self.verification_records = RepresentativeVerificationRepository(db)
+        self.verifications = RepresentativeVerificationService(db)
 
     async def request_otp(self, email: str, client_ip: str) -> OtpRequestResult:
         normalized_email = normalize_email(email)
@@ -123,7 +134,25 @@ class AdultAuthService:
 
         challenge.consumed_at = now  # type: ignore[union-attr]
         adult.last_login_at = now
-        await self.db.commit()
+        try:
+            if auto_approval_allowed(
+                self.auto_approve_representative_verification,
+                self.auto_approve_representative_email_allowlist,
+                adult.email,
+            ):
+                for profile in await self.links.list_profiles_for_adult(adult.id):
+                    if profile.active:
+                        verification = await self.verification_records.get_by_adult_profile(
+                            adult.id, profile.id
+                        )
+                        if verification is not None and verification.status == RepresentativeVerificationStatus.PENDING:
+                            await self.verifications.approve_automatically(
+                                adult.id, profile.id, commit=False
+                            )
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            raise
         token, expires_in = self.token_codec.issue(adult.id, now=now)
         return AdultTokenResult(access_token=token, expires_in=expires_in)
 

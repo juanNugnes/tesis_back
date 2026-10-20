@@ -26,6 +26,7 @@ from app.services.device_service import (
     is_installation_id_conflict,
 )
 from app.services.representative_verification_service import RepresentativeVerificationService
+from app.services.representative_auto_approval import auto_approval_allowed
 
 DEVICE_LINK_PURPOSE = "DEVICE_LINK"
 ADULT_PROFILE_LINK_PURPOSE = "ADULT_PROFILE_LINK"
@@ -71,6 +72,7 @@ class ProfileLinkService:
         ttl_minutes: int = 10,
         code_generator: Callable[[], str] = generate_numeric_code,
         auto_approve_representative_verification: bool = False,
+        auto_approve_representative_email_allowlist: str = "",
     ):
         self.db = db
         self.hash_secret = hash_secret.encode("utf-8")
@@ -83,6 +85,9 @@ class ProfileLinkService:
         self.representative_verifications = RepresentativeVerificationService(db)
         self.auto_approve_representative_verification = (
             auto_approve_representative_verification
+        )
+        self.auto_approve_representative_email_allowlist = (
+            auto_approve_representative_email_allowlist
         )
         self.device_service = DeviceService(db, self.devices)
 
@@ -224,7 +229,11 @@ class ProfileLinkService:
             if not consumed:
                 raise InvalidLinkCodeError
 
-            if self.auto_approve_representative_verification:
+            if auto_approval_allowed(
+                self.auto_approve_representative_verification,
+                self.auto_approve_representative_email_allowlist,
+                adult.email,
+            ):
                 await self.representative_verifications.approve_automatically(
                     adult.id,
                     profile.id,

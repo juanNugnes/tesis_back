@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     ses_sender_email: str | None = None
     ses_timeout_seconds: float = Field(default=5.0, gt=0)
     auto_approve_representative_verification: bool = False
+    auto_approve_representative_email_allowlist: str = ""
     device_auth_jwt_secret: SecretStr | None = None
     device_auth_jwt_exp_minutes: int = Field(default=43_200, gt=0)
     device_bootstrap_ttl_minutes: int = Field(default=10, gt=0)

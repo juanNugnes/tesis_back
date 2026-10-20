@@ -86,6 +86,12 @@ async def get_adult_auth_service(
         settings.adult_otp_max_attempts,
         delivery,
         OtpRateLimiter(db, secret, settings),
+        auto_approve_representative_verification=(
+            settings.auto_approve_representative_verification
+        ),
+        auto_approve_representative_email_allowlist=(
+            settings.auto_approve_representative_email_allowlist
+        ),
         expose_dev_otp=(
             settings.environment == "development"
             and settings.otp_email_provider == "development"

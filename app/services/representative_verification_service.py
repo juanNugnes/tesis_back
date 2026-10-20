@@ -1,11 +1,13 @@
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     AuditActorType,
     AuditEventType,
+    Profile,
     RepresentativeVerification,
     RepresentativeVerificationStatus,
 )
@@ -91,7 +93,17 @@ class RepresentativeVerificationService:
         *,
         commit: bool = True,
     ) -> RepresentativeVerification:
-        verification = await self.ensure_pending(adult_id, profile_id, commit=False)
+        link = await self.links.get_active_link(adult_id, profile_id)
+        profile_active = await self.db.scalar(
+            select(Profile.active).where(Profile.id == profile_id)
+        )
+        if link is None or not profile_active:
+            raise RepresentativeLinkNotFoundError
+        verification = await self.verifications.get_by_adult_profile_for_update(
+            adult_id, profile_id
+        )
+        if verification is None:
+            verification = await self.verifications.create_pending(adult_id, profile_id)
         if verification.status in {
             RepresentativeVerificationStatus.APPROVED,
             RepresentativeVerificationStatus.REJECTED,
@@ -104,7 +116,7 @@ class RepresentativeVerificationService:
         verification = await self.verifications.approve(
             verification,
             verified_at=now,
-            verified_by="automatic-mvp",
+            verified_by="automatic-mvp-allowlist",
             notes=None,
         )
         await self.audit.append(
@@ -112,7 +124,7 @@ class RepresentativeVerificationService:
             actor_id=None,
             profile_id=profile_id,
             event_type=AuditEventType.REPRESENTATIVE_VERIFICATION_APPROVED,
-            metadata={"verified_by": "automatic-mvp"},
+            metadata={"verified_by": "automatic-mvp-allowlist"},
         )
         if commit:
             await self.db.commit()

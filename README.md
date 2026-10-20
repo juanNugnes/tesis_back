@@ -332,11 +332,12 @@ Para simplificar exclusivamente pruebas y demostraciones del MVP puede habilitar
 
 ```text
 AUTO_APPROVE_REPRESENTATIVE_VERIFICATION=true
+AUTO_APPROVE_REPRESENTATIVE_EMAIL_ALLOWLIST=<correo-prueba-1>,<correo-prueba-2>
 ```
 
-El valor por defecto es `false`. Cuando esta habilitado, solamente un claim exitoso de `POST /adult/profile-links/claim` promueve una verificacion inexistente o `PENDING` a `APPROVED`, con `verified_by=automatic-mvp` y su AuditEvent. Una verificacion `APPROVED` no se duplica y una `REJECTED` nunca se sobrescribe automaticamente. OTP, login, generacion de codigos y `DEVICE_LINK` no disparan esta transicion.
+El valor por defecto es `false`. La lista debe contener exactamente dos correos completos y distintos, separados por coma; se normalizan espacios extremos y mayusculas. Si el flag esta apagado o la lista esta vacia o mal formada, nadie se autoaprueba. Solo para esos correos, un OTP correcto promueve verificaciones `PENDING` de vinculos activos y perfiles activos; un claim adulto valido tambien puede aprobar su vinculo nuevo o pendiente. No se crean vinculos a partir del OTP. Una verificacion `APPROVED` no se duplica y una `REJECTED` nunca se sobrescribe automaticamente. Cada transicion usa el servicio de verificacion y un unico AuditEvent con `verified_by=automatic-mvp-allowlist`.
 
-La autoaprobacion no crea Consent ni modifica sus reglas: el adulto debe aceptar explicitamente el aviso de privacidad despues de vincularse. Esta opcion no constituye una verificacion real de representacion legal. Antes de produccion debe configurarse `AUTO_APPROVE_REPRESENTATIVE_VERIFICATION=false` y utilizarse un mecanismo real o manual de verificacion.
+La autoaprobacion no crea Consent ni modifica sus reglas: el adulto debe aceptar explicitamente el aviso de privacidad despues de vincularse. Esta opcion es un mecanismo de prueba del MVP, no una verificacion legal de identidad o representacion parental. Fuera de las pruebas cerradas debe mantenerse `AUTO_APPROVE_REPRESENTATIVE_VERIFICATION=false` y usarse el proceso manual o uno verificado. Procedimiento operativo para AWS: [autoaprobacion de pruebas cerradas](docs/representative-auto-approval-closed-mvp.md).
 
 Para aceptar `POST /usage` debe existir al menos un adulto del Profile con vinculo activo, verificacion `APPROVED` y consentimiento `ACTIVE` para `USAGE_MONITORING`. No se exige que todos los adultos vinculados consientan. Un vinculo revocado o una verificacion que luego pasa a `REJECTED` deja de contar aunque el Consent permanezca `ACTIVE`.
 

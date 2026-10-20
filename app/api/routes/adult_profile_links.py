@@ -30,6 +30,9 @@ def link_service(db: AsyncSession) -> ProfileLinkService:
         auto_approve_representative_verification=(
             settings.auto_approve_representative_verification
         ),
+        auto_approve_representative_email_allowlist=(
+            settings.auto_approve_representative_email_allowlist
+        ),
     )
 
 
