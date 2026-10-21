@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     analytics_service_url: str = "http://analytics:8765"
     analytics_service_token: SecretStr | None = None
     analytics_timeout_seconds: float = Field(default=5.0, gt=0)
+    child_offers_test_enabled: bool = False
+    child_offers_test_profile_ids: str = ""
 
     @field_validator("otp_trusted_proxy_cidrs")
     @classmethod

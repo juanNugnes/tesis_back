@@ -692,6 +692,9 @@ Android no necesita cambiar payloads ni rutas; debe respetar `Retry-After` si re
 
 Siguen pendientes una estrategia de refresh/rotacion, acceso/rectificacion/supresion, retencion automatica, exportacion, identidad administrativa y una auditoria legal completa.
 
+La integración controlada del coordinador infantil (sin activación para familias)
+se describe en [docs/child-offers-test-integration.md](docs/child-offers-test-integration.md).
+
 ## Estado del análisis
 
 No hay un algoritmo de ML real ni umbrales clínicos. `BaselineService` y `RulesService` son puntos de extensión deliberadamente mínimos. El futuro adaptador de ML probablemente cargará un artefacto de scikit-learn y deberá implementar el protocolo definido en `app/services/ml_service.py`.

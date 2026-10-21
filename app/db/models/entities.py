@@ -531,6 +531,21 @@ class ActivityOffer(Base):
     )
 
 
+class ChildOfferOperation(Base):
+    """Durable transport receipt; automatic offers remain owned by Analytics."""
+
+    __tablename__ = "child_offer_operations"
+    __table_args__ = (Index("ix_child_offer_operations_profile_status", "profile_id", "status"),)
+    request_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("profiles.id", ondelete="RESTRICT"))
+    device_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("devices.id", ondelete="RESTRICT"))
+    kind: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    payload: Mapped[dict] = mapped_column(JSON)
+    receipt: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ActivityOfferItem(Base):
     __tablename__ = "activity_offer_items"
     __table_args__ = (
