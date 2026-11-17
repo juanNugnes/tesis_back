@@ -546,6 +546,28 @@ class ChildOfferOperation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AutomaticOfferSettings(Base):
+    """Adult-asserted controls required before automatic offers are evaluated."""
+
+    __tablename__ = "automatic_offer_settings"
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    adult_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("adult_accounts.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    automatic_enabled: Mapped[bool] = mapped_column(Boolean)
+    shared_phone: Mapped[bool] = mapped_column(Boolean)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class ActivityOfferItem(Base):
     __tablename__ = "activity_offer_items"
     __table_args__ = (

@@ -25,6 +25,11 @@ class ChildOfferService:
     async def evaluate(self, profile_id: UUID, device_id: UUID, payload: dict) -> dict:
         return await self._post("evaluate", profile_id, device_id, payload)
 
+    async def evaluate_adaptive(
+        self, profile_id: UUID, device_id: UUID, payload: dict,
+    ) -> dict:
+        return await self._post("adaptive", profile_id, device_id, payload)
+
     async def event(self, profile_id: UUID, device_id: UUID, payload: dict) -> dict:
         # An offer ID is not a bearer capability. Confirm its profile before a write.
         prior = await self.db.get(ChildOfferOperation, payload["request_id"])
@@ -76,10 +81,12 @@ class ChildOfferService:
         # Commit before transport: lost responses leave a durable, exact retry payload.
         await self.db.commit()
         try:
-            receipt = (
-                await self.analytics.evaluate(payload) if kind == "evaluate"
-                else await self.analytics.event(payload)
-            )
+            if kind == "evaluate":
+                receipt = await self.analytics.evaluate(payload)
+            elif kind == "adaptive":
+                receipt = await self.analytics.evaluate_adaptive(payload)
+            else:
+                receipt = await self.analytics.event(payload)
         except ChildOffersError as error:
             if error.status_code in (400, 409):
                 operation = await self.db.get(ChildOfferOperation, request_id)

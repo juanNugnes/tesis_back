@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     analytics_timeout_seconds: float = Field(default=5.0, gt=0)
     child_offers_test_enabled: bool = False
     child_offers_test_profile_ids: str = ""
+    adaptive_child_offers_enabled: bool = False
 
     @field_validator("otp_trusted_proxy_cidrs")
     @classmethod

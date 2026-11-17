@@ -35,6 +35,55 @@ class ActivityOfferRepository:
         await self.db.refresh(offer)
         return offer
 
+    async def ensure_coordinator_offer(
+        self,
+        *,
+        offer_id: uuid.UUID,
+        profile_id: uuid.UUID,
+        device_id: uuid.UUID,
+        activity_ids: list[str],
+    ) -> ActivityOffer:
+        """Materialize a coordinator offer in the existing selection repository."""
+        existing = await self.get_offer(offer_id)
+        if existing is not None:
+            if (
+                existing.profile_id != profile_id
+                or existing.device_id != device_id
+                or existing.context != "automatic"
+                or [item.activity_id for item in existing.items] != activity_ids
+            ):
+                raise ValueError("Coordinator offer conflicts with persisted activity offer")
+            return existing
+
+        offer = ActivityOffer(
+            id=offer_id,
+            profile_id=profile_id,
+            device_id=device_id,
+            context="automatic",
+            items=[
+                ActivityOfferItem(activity_id=activity_id, ordinal=ordinal)
+                for ordinal, activity_id in enumerate(activity_ids, start=1)
+            ],
+        )
+        self.db.add(offer)
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            await self.db.rollback()
+            existing = await self.get_offer(offer_id)
+            if existing is None:
+                raise
+            if (
+                existing.profile_id != profile_id
+                or existing.device_id != device_id
+                or existing.context != "automatic"
+                or [item.activity_id for item in existing.items] != activity_ids
+            ):
+                raise ValueError("Coordinator offer conflicts with persisted activity offer")
+            return existing
+        await self.db.refresh(offer)
+        return offer
+
     async def get_offer(self, offer_id: uuid.UUID) -> ActivityOffer | None:
         return await self.db.scalar(
             select(ActivityOffer)
@@ -47,6 +96,27 @@ class ActivityOfferRepository:
         selection_id: uuid.UUID,
     ) -> ActivitySelection | None:
         return await self.db.get(ActivitySelection, selection_id)
+
+    async def has_recorded_selection(
+        self,
+        *,
+        offer_id: uuid.UUID,
+        profile_id: uuid.UUID,
+        device_id: uuid.UUID,
+        activity_id: str,
+    ) -> bool:
+        return bool(
+            await self.db.scalar(
+                select(ActivitySelection.selection_id)
+                .where(
+                    ActivitySelection.offer_id == offer_id,
+                    ActivitySelection.profile_id == profile_id,
+                    ActivitySelection.device_id == device_id,
+                    ActivitySelection.activity_id == activity_id,
+                )
+                .limit(1)
+            )
+        )
 
     async def count_selections(
         self,

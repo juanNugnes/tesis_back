@@ -6,6 +6,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.schemas.child_offer import (
+    AdaptiveChildOfferEvaluationReceipt,
     ChildOfferEvaluationReceipt,
     ChildOfferEventReceipt,
     ChildOfferHistory,
@@ -38,6 +39,7 @@ class ChildOffersClient:
         *, transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.root = f"{service_url.rstrip('/')}/v1/child-offers"
+        self.adaptive_root = f"{service_url.rstrip('/')}/v2/child-offers"
         self.token = service_token
         self.timeout = timeout_seconds
         self.transport = transport
@@ -46,6 +48,12 @@ class ChildOffersClient:
         return await self._request(
             "POST", "/evaluate", payload, ChildOfferEvaluationReceipt,
             payload["evidence"]["profile_id"],
+        )
+
+    async def evaluate_adaptive(self, payload: dict) -> dict:
+        return await self._request(
+            "POST", "/evaluate", payload, AdaptiveChildOfferEvaluationReceipt,
+            payload["evidence"]["profile_id"], root=self.adaptive_root,
         )
 
     async def event(self, payload: dict) -> dict:
@@ -58,7 +66,7 @@ class ChildOffersClient:
             "GET", f"/profiles/{profile_id}/history", None, ChildOfferHistory, profile_id,
         )
 
-    async def _request(self, method, path, payload, schema, profile_id):
+    async def _request(self, method, path, payload, schema, profile_id, *, root=None):
         if not self.token:
             raise ChildOffersError("CHILD_OFFERS_NOT_CONFIGURED", 503)
         try:
@@ -66,7 +74,7 @@ class ChildOffersClient:
                 timeout=self.timeout, transport=self.transport, follow_redirects=False,
             ) as client:
                 response = await client.request(
-                    method, self.root + path,
+                    method, (root or self.root) + path,
                     headers={"Authorization": f"Bearer {self.token}"}, json=payload,
                 )
         except httpx.TimeoutException:
