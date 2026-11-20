@@ -191,3 +191,58 @@ class HistoricalSubmissionRead(BaseModel):
     last_error_message: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class HistoricalAnalyticsEvaluationRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["ABSTAIN", "NO_CHANGE", "CHANGE"]
+    abstention_reason: str | None = None
+
+
+class HistoricalSubmissionSummaryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    local_date: date
+    status: HistoricalSubmissionStatus
+    attempts: int = Field(ge=0)
+    analytics_evaluation_id: str | None
+    analytics_evaluation: HistoricalAnalyticsEvaluationRead | None = None
+    retryable: bool
+    last_error_code: str | None
+    last_error_message: str | None
+
+    @classmethod
+    def from_submission(
+        cls,
+        submission,
+    ) -> "HistoricalSubmissionSummaryRead":
+        evaluation = None
+        response = submission.analytics_response
+        if submission.status == HistoricalSubmissionStatus.PROCESSED and isinstance(
+            response, dict
+        ):
+            result = response.get("result")
+            raw_evaluation = result.get("evaluation") if isinstance(result, dict) else None
+            if isinstance(raw_evaluation, dict):
+                outcome = raw_evaluation.get("outcome")
+                if outcome in {"ABSTAIN", "NO_CHANGE", "CHANGE"}:
+                    reason = raw_evaluation.get("abstention_reason")
+                    if reason is None or isinstance(reason, str):
+                        evaluation = HistoricalAnalyticsEvaluationRead(
+                            outcome=outcome,
+                            abstention_reason=reason,
+                        )
+
+        return cls(
+            id=submission.id,
+            local_date=submission.local_date,
+            status=submission.status,
+            attempts=submission.attempts,
+            analytics_evaluation_id=submission.analytics_evaluation_id,
+            analytics_evaluation=evaluation,
+            retryable=submission.retryable,
+            last_error_code=submission.last_error_code,
+            last_error_message=submission.last_error_message,
+        )

@@ -1,9 +1,14 @@
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_device, require_device_profile_access
+from app.api.dependencies import (
+    get_current_device,
+    require_device_profile_access,
+    require_verified_profile_access,
+)
 from app.core.config import get_settings
 from app.db.models import Device, HistoricalSubmission, HistoricalSubmissionStatus, Profile
 from app.db.session import get_db
@@ -13,6 +18,7 @@ from app.repositories.historical_submission_repository import (
 from app.schemas.historical_submission import (
     HistoricalSubmissionCreate,
     HistoricalSubmissionRead,
+    HistoricalSubmissionSummaryRead,
 )
 from app.services.historical_analytics_client import HistoricalAnalyticsClient
 from app.services.historical_submission_service import (
@@ -59,6 +65,36 @@ def _service(
         HistoricalSubmissionRepository(db),
         client,
     )
+
+
+@router.get("", response_model=list[HistoricalSubmissionSummaryRead])
+async def list_historical_submissions(
+    response: Response,
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    submission_status: HistoricalSubmissionStatus | None = Query(
+        default=None,
+        alias="status",
+    ),
+    profile: Profile = Depends(require_verified_profile_access),
+    db: AsyncSession = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="date_from must not be after date_to",
+        )
+    submissions = await HistoricalSubmissionRepository(db).list_for_profile(
+        profile.id,
+        date_from=date_from,
+        date_to=date_to,
+        submission_status=submission_status,
+    )
+    return [
+        HistoricalSubmissionSummaryRead.from_submission(submission)
+        for submission in submissions
+    ]
 
 
 @router.post("", response_model=HistoricalSubmissionRead)

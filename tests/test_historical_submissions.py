@@ -17,9 +17,20 @@ from app.services.historical_analytics_client import (
     HistoricalAnalyticsClient,
     HistoricalAnalyticsResult,
 )
+from app.services.representative_verification_service import (
+    RepresentativeVerificationService,
+)
 
 
-def processed_response(request_id, *, replayed=False, outcome="ABSTAIN"):
+def processed_response(
+    request_id,
+    *,
+    replayed=False,
+    outcome="ABSTAIN",
+    abstention_reason=None,
+):
+    if outcome == "ABSTAIN" and abstention_reason is None:
+        abstention_reason = "INSUFFICIENT_HISTORY"
     return {
         "status": "processed",
         "request_id": request_id,
@@ -33,6 +44,7 @@ def processed_response(request_id, *, replayed=False, outcome="ABSTAIN"):
             "evaluation": {
                 "evaluation_id": f"eval-{request_id}",
                 "outcome": outcome,
+                "abstention_reason": abstention_reason,
             },
             "emission": {"decision": "NO_EMIT", "event": None},
             "next_state": {},
@@ -40,11 +52,18 @@ def processed_response(request_id, *, replayed=False, outcome="ABSTAIN"):
     }
 
 
-def processed_result(request_id, *, replayed=False, outcome="ABSTAIN"):
+def processed_result(
+    request_id,
+    *,
+    replayed=False,
+    outcome="ABSTAIN",
+    abstention_reason=None,
+):
     payload = processed_response(
         request_id,
         replayed=replayed,
         outcome=outcome,
+        abstention_reason=abstention_reason,
     )
     return HistoricalAnalyticsResult(
         kind="processed",
@@ -149,6 +168,273 @@ async def post_submission(client, profile_id, headers, payload):
         headers=headers,
         json=payload,
     )
+
+
+async def get_submissions(client, profile_id, headers, params=None):
+    return await client.get(
+        f"/api/v1/profiles/{profile_id}/historical-submissions",
+        headers=headers,
+        params=params,
+    )
+
+
+async def verified_adult_session(adult_session, db_session, profile_id):
+    headers, adult = await adult_session(profile_id)
+    await RepresentativeVerificationService(db_session).approve(
+        adult.id,
+        uuid.UUID(str(profile_id)),
+        verified_by="pytest-historical-read",
+    )
+    return headers, adult
+
+
+@pytest.mark.asyncio
+async def test_authorized_adult_lists_historical_submission_summaries(
+    client,
+    adult_session,
+    db_session,
+    historical_client,
+):
+    profile, _, device_headers = await create_profile_and_device(client, "History read")
+    payload = historical_payload(date(2026, 9, 1))
+    created = await post_submission(client, profile["id"], device_headers, payload)
+    assert created.status_code == 200
+    adult_headers, _ = await verified_adult_session(
+        adult_session, db_session, profile["id"]
+    )
+
+    response = await get_submissions(client, profile["id"], adult_headers)
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "id": created.json()["id"],
+            "local_date": "2026-09-01",
+            "status": "PROCESSED",
+            "attempts": 1,
+            "analytics_evaluation_id": f"eval-{payload['request_id']}",
+            "analytics_evaluation": {
+                "outcome": "ABSTAIN",
+                "abstention_reason": "INSUFFICIENT_HISTORY",
+            },
+            "retryable": False,
+            "last_error_code": None,
+            "last_error_message": None,
+        }
+    ]
+    assert len(historical_client.payloads) == 1
+    assert response.headers["cache-control"] == "no-store"
+    for private_field in (
+        "payload",
+        "analytics_response",
+        "series_key",
+        "device_id",
+        "assignment_id",
+    ):
+        assert private_field not in response.json()[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["NO_CHANGE", "CHANGE"])
+async def test_historical_submission_list_preserves_evaluated_c1_outcome(
+    client,
+    adult_session,
+    db_session,
+    historical_client,
+    outcome,
+):
+    profile, _, device_headers = await create_profile_and_device(
+        client, f"History {outcome}"
+    )
+    payload = historical_payload()
+    historical_client.results = [
+        processed_result(payload["request_id"], outcome=outcome)
+    ]
+    created = await post_submission(client, profile["id"], device_headers, payload)
+    assert created.status_code == 200
+    adult_headers, _ = await verified_adult_session(
+        adult_session, db_session, profile["id"]
+    )
+
+    response = await get_submissions(client, profile["id"], adult_headers)
+
+    assert response.status_code == 200
+    assert response.json()[0]["status"] == "PROCESSED"
+    assert response.json()[0]["analytics_evaluation"] == {
+        "outcome": outcome,
+        "abstention_reason": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_historical_submission_list_supports_date_and_status_filters(
+    client,
+    adult_session,
+    db_session,
+    historical_client,
+):
+    profile, _, device_headers = await create_profile_and_device(client, "History filters")
+    first_payload = historical_payload(date(2026, 9, 1))
+    second_payload = historical_payload(date(2026, 9, 2))
+    historical_client.results = [
+        processed_result(first_payload["request_id"]),
+        technical_result(),
+    ]
+    first = await post_submission(client, profile["id"], device_headers, first_payload)
+    second = await post_submission(client, profile["id"], device_headers, second_payload)
+    assert first.status_code == 200
+    assert second.status_code == 503
+    adult_headers, _ = await verified_adult_session(
+        adult_session, db_session, profile["id"]
+    )
+
+    by_date = await get_submissions(
+        client,
+        profile["id"],
+        adult_headers,
+        {"date_from": "2026-09-02", "date_to": "2026-09-02"},
+    )
+    processed = await get_submissions(
+        client,
+        profile["id"],
+        adult_headers,
+        {"status": "PROCESSED"},
+    )
+
+    assert by_date.status_code == 200
+    assert [item["id"] for item in by_date.json()] == [second.json()["id"]]
+    assert by_date.json()[0]["last_error_code"] == "HISTORICAL_TIMEOUT"
+    assert by_date.json()[0]["last_error_message"] == "Technical historical failure"
+    assert by_date.json()[0]["retryable"] is True
+    assert by_date.json()[0]["analytics_evaluation"] is None
+    assert processed.status_code == 200
+    assert [item["id"] for item in processed.json()] == [first.json()["id"]]
+
+    invalid_range = await get_submissions(
+        client,
+        profile["id"],
+        adult_headers,
+        {"date_from": "2026-09-02", "date_to": "2026-09-01"},
+    )
+    assert invalid_range.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_historical_submission_list_keeps_missing_evaluation_distinct(
+    client,
+    adult_session,
+    db_session,
+    historical_client,
+):
+    profile, _, device_headers = await create_profile_and_device(
+        client, "History pending"
+    )
+    historical_client.results = [technical_result()]
+    created = await post_submission(
+        client,
+        profile["id"],
+        device_headers,
+        historical_payload(),
+    )
+    assert created.status_code == 503
+    submission = await db_session.get(
+        HistoricalSubmission,
+        uuid.UUID(created.json()["id"]),
+    )
+    submission.status = HistoricalSubmissionStatus.PENDING
+    submission.analytics_response = None
+    submission.retryable = False
+    submission.last_error_code = None
+    submission.last_error_message = None
+    await db_session.commit()
+    adult_headers, _ = await verified_adult_session(
+        adult_session, db_session, profile["id"]
+    )
+
+    response = await get_submissions(client, profile["id"], adult_headers)
+
+    assert response.status_code == 200
+    assert response.json()[0]["status"] == "PENDING"
+    assert response.json()[0]["analytics_evaluation"] is None
+    assert response.json()[0]["last_error_code"] is None
+    assert response.json()[0]["last_error_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_historical_submission_list_requires_verified_adult_access(
+    client,
+    adult_session,
+    historical_client,
+):
+    profile, _, _ = await create_profile_and_device(client, "History unverified")
+    linked_headers, _ = await adult_session(profile["id"])
+
+    response = await get_submissions(client, profile["id"], linked_headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Verified profile access required"
+    assert historical_client.payloads == []
+
+
+@pytest.mark.asyncio
+async def test_historical_submission_list_enforces_adult_profile_access(
+    client,
+    adult_session,
+    db_session,
+    historical_client,
+):
+    profile, _, device_headers = await create_profile_and_device(client, "History owner")
+    foreign, _, foreign_device_headers = await create_profile_and_device(
+        client, "History foreign"
+    )
+    created = await post_submission(
+        client,
+        profile["id"],
+        device_headers,
+        historical_payload(),
+    )
+    assert created.status_code == 200
+    foreign_created = await post_submission(
+        client,
+        foreign["id"],
+        foreign_device_headers,
+        historical_payload(request_id=f"foreign-{uuid.uuid4().hex}"),
+    )
+    assert foreign_created.status_code == 200
+    adult_headers, _ = await verified_adult_session(
+        adult_session, db_session, foreign["id"]
+    )
+
+    unauthenticated = await get_submissions(client, profile["id"], {})
+    unauthorized = await get_submissions(client, profile["id"], adult_headers)
+    device_only = await get_submissions(client, profile["id"], device_headers)
+
+    assert unauthenticated.status_code == 401
+    assert unauthorized.status_code == 403
+    assert device_only.status_code == 401
+
+    own = await get_submissions(client, foreign["id"], adult_headers)
+    assert own.status_code == 200
+    assert [item["id"] for item in own.json()] == [foreign_created.json()["id"]]
+
+
+@pytest.mark.asyncio
+async def test_historical_submission_list_returns_empty_for_authorized_profile(
+    client,
+    adult_session,
+    db_session,
+    historical_client,
+):
+    profile, _, _ = await create_profile_and_device(client, "History empty")
+    adult_headers, _ = await verified_adult_session(
+        adult_session, db_session, profile["id"]
+    )
+
+    response = await get_submissions(client, profile["id"], adult_headers)
+
+    assert response.status_code == 200
+    assert response.json() == []
+    assert historical_client.payloads == []
 
 
 @pytest.mark.asyncio
@@ -585,10 +871,11 @@ async def test_historical_client_classifies_timeout_as_retryable():
     assert result.retryable is True
 
 
-def test_historical_openapi_contract_is_device_only():
+def test_historical_openapi_contract_separates_adult_read_from_device_writes():
     paths = app.openapi()["paths"]
     base = "/api/v1/profiles/{profile_id}/historical-submissions"
 
+    assert paths[base]["get"]["security"] == [{"AdultBearer": []}]
     assert paths[base]["post"]["security"] == [{"DeviceBearer": []}]
     assert paths[f"{base}/{{submission_id}}/retry"]["post"]["security"] == [
         {"DeviceBearer": []}

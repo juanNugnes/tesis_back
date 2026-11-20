@@ -24,6 +24,29 @@ class HistoricalSubmissionRepository:
     async def get(self, submission_id: uuid.UUID) -> HistoricalSubmission | None:
         return await self.db.get(HistoricalSubmission, submission_id)
 
+    async def list_for_profile(
+        self,
+        profile_id: uuid.UUID,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        submission_status: HistoricalSubmissionStatus | None = None,
+    ) -> list[HistoricalSubmission]:
+        query = select(HistoricalSubmission).where(
+            HistoricalSubmission.profile_id == profile_id
+        )
+        if date_from is not None:
+            query = query.where(HistoricalSubmission.local_date >= date_from)
+        if date_to is not None:
+            query = query.where(HistoricalSubmission.local_date <= date_to)
+        if submission_status is not None:
+            query = query.where(HistoricalSubmission.status == submission_status)
+        query = query.order_by(
+            HistoricalSubmission.local_date.desc(),
+            HistoricalSubmission.created_at.desc(),
+        )
+        return list((await self.db.scalars(query)).all())
+
     async def get_by_request_id(self, request_id: str) -> HistoricalSubmission | None:
         return await self.db.scalar(
             select(HistoricalSubmission).where(
