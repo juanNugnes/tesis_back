@@ -1,6 +1,6 @@
 import copy
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -9,10 +9,18 @@ import pytest
 from sqlalchemy import func, select
 
 from app.api.routes.profile_child_offers import get_child_offers_client
-from app.db.models import ActivityOffer, ActivitySelection, ChildOfferOperation
+from app.db.models import (
+    ActivityOffer,
+    ActivitySelection,
+    ChildOfferOperation,
+    ProfileActivityPreferences,
+    ProfileSettings,
+)
 from app.main import app
+from app.repositories.activity_offer_repository import ActivityOfferRepository
 from app.repositories.experimental_pmum_repository import ExperimentalPmumRepository
 from app.schemas.experimental_pmum import ParentalScreenTimeResponseCreate
+from app.services.automatic_opportunity_service import _inside_window
 from app.services.child_offers_client import ChildOffersClient, ChildOffersError
 from app.services.representative_verification_service import RepresentativeVerificationService
 
@@ -29,6 +37,8 @@ class FakeAdaptiveCoordinator:
         self.failure = None
         self.lose_after_create = False
         self.incomplete_content = False
+        self.suppression_reason = None
+        self.offer_id_override = None
 
     async def evaluate_adaptive(self, payload):
         self.calls.append(copy.deepcopy(payload))
@@ -39,7 +49,15 @@ class FakeAdaptiveCoordinator:
         request_id = payload["request_id"]
         created = request_id not in self.receipts
         if created:
-            offer_id = str(uuid.uuid4())
+            if self.suppression_reason is not None:
+                self.receipts[request_id] = {
+                    "status": "suppressed",
+                    "reason": self.suppression_reason,
+                    "policy_version": "automatic-child-offers-v2-pmum-candidate",
+                    "replayed": False,
+                }
+                return copy.deepcopy(self.receipts[request_id])
+            offer_id = self.offer_id_override or str(uuid.uuid4())
             evidence = payload["evidence"]
             first_activity = {
                 "activity_id": "breathing-bubble",
@@ -193,21 +211,23 @@ async def configured_profile(
     return profile, device_headers, adult_headers, adult, observed
 
 
-async def add_parental_response(db_session, profile_id, adult):
+async def add_parental_response(db_session, profile_id, adult, **overrides):
     from app.repositories.profile_repository import ProfileRepository
 
     profile = await ProfileRepository(db_session).get(uuid.UUID(profile_id))
     assert profile is not None
+    values = {
+        "sex_code": 1,
+        "weekday_category": 2,
+        "weekend_category": 3,
+        "respondent": "parent_or_caregiver",
+        "reference_days": 30,
+    }
+    values.update(overrides)
     return await ExperimentalPmumRepository(db_session).create_response(
         profile,
         adult,
-        ParentalScreenTimeResponseCreate(
-            sex_code=1,
-            weekday_category=2,
-            weekend_category=3,
-            respondent="parent_or_caregiver",
-            reference_days=30,
-        ),
+        ParentalScreenTimeResponseCreate(**values),
     )
 
 
@@ -295,6 +315,22 @@ async def test_real_evidence_builds_v2_request_replays_and_reuses_activity_selec
     assert retried.json()["replayed"] is True
     assert len(adaptive_coordinator.calls) == 1
     assert await db_session.scalar(select(func.count()).select_from(ActivityOffer)) == 1
+
+    offers = ActivityOfferRepository(db_session)
+    existing = await offers.ensure_coordinator_offer(
+        offer_id=uuid.UUID(body["activity_offer_id"]),
+        profile_id=uuid.UUID(profile["id"]),
+        device_id=(await offers.get_offer(uuid.UUID(body["activity_offer_id"]))).device_id,
+        activity_ids=["breathing-bubble", "draw-a-map"],
+    )
+    assert existing.id == uuid.UUID(body["activity_offer_id"])
+    with pytest.raises(ValueError, match="conflicts"):
+        await offers.ensure_coordinator_offer(
+            offer_id=existing.id,
+            profile_id=uuid.UUID(profile["id"]),
+            device_id=existing.device_id,
+            activity_ids=["different-activity"],
+        )
 
     selected = await client.post(
         f"/api/v1/profiles/{profile['id']}/activity-selections",
@@ -517,6 +553,284 @@ async def test_retryable_analytics_failure_keeps_exact_idempotent_payload(
     assert retried.json()["replayed"] is True
     assert adaptive_coordinator.calls[0] == adaptive_coordinator.calls[1]
     assert len(adaptive_coordinator.offers) == 1
+
+
+@pytest.mark.asyncio
+async def test_adult_offer_settings_can_be_read_created_and_updated(
+    client, db_session, adult_session, monitoring_authorization,
+):
+    profile, _device, adult_headers, _adult, _observed = await configured_profile(
+        client,
+        db_session,
+        adult_session,
+        monitoring_authorization,
+        configure_adult=False,
+    )
+    url = f"/api/v1/profiles/{profile['id']}/child-offers/settings"
+    assert (await client.get(url, headers=adult_headers)).status_code == 404
+
+    created = await client.put(
+        url,
+        headers=adult_headers,
+        json={"automatic_enabled": False, "shared_phone": True},
+    )
+    assert created.status_code == 200
+    assert created.json()["automatic_enabled"] is False
+    assert created.json()["shared_phone"] is True
+
+    updated = await client.put(
+        url,
+        headers=adult_headers,
+        json={"automatic_enabled": True, "shared_phone": False},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["automatic_enabled"] is True
+    assert updated.json()["shared_phone"] is False
+    assert (await client.get(url, headers=adult_headers)).json() == updated.json()
+
+
+@pytest.mark.asyncio
+async def test_unknown_adult_and_capture_conditions_are_discarded_before_analytics(
+    client, db_session, adult_session, monitoring_authorization, adaptive_coordinator, monkeypatch,
+):
+    profile, device, adult_headers, _adult, observed = await configured_profile(
+        client,
+        db_session,
+        adult_session,
+        monitoring_authorization,
+        configure_adult=False,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.profile_child_offers.get_settings",
+        lambda: SimpleNamespace(adaptive_child_offers_enabled=True),
+    )
+    base = f"/api/v1/profiles/{profile['id']}"
+    url = base + "/child-offers/opportunities"
+
+    missing = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert missing.json()["reason"] == "adult_offer_settings_missing"
+
+    disabled = await client.put(
+        base + "/child-offers/settings",
+        headers=adult_headers,
+        json={"automatic_enabled": False, "shared_phone": False},
+    )
+    assert disabled.status_code == 200
+    response = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert response.json()["reason"] == "automatic_offers_disabled"
+
+    shared = await client.put(
+        base + "/child-offers/settings",
+        headers=adult_headers,
+        json={"automatic_enabled": True, "shared_phone": True},
+    )
+    assert shared.status_code == 200
+    response = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert response.json()["reason"] == "shared_phone"
+
+    enabled = await client.put(
+        base + "/child-offers/settings",
+        headers=adult_headers,
+        json={"automatic_enabled": True, "shared_phone": False},
+    )
+    assert enabled.status_code == 200
+    response = await client.post(
+        url,
+        headers=device,
+        json=opportunity_payload(observed, screen_interactive=False),
+    )
+    assert response.json()["reason"] == "screen_inactive"
+    assert adaptive_coordinator.calls == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_eligibility_pmum_and_school_guards_use_persisted_facts(
+    client, db_session, adult_session, monitoring_authorization, adaptive_coordinator, monkeypatch,
+):
+    profile, device, _adult_headers, adult, observed = await configured_profile(
+        client, db_session, adult_session, monitoring_authorization,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.profile_child_offers.get_settings",
+        lambda: SimpleNamespace(adaptive_child_offers_enabled=True),
+    )
+    profile_id = uuid.UUID(profile["id"])
+    url = f"/api/v1/profiles/{profile['id']}/child-offers/opportunities"
+    settings = await db_session.scalar(
+        select(ProfileSettings).where(ProfileSettings.profile_id == profile_id)
+    )
+    preferences = await db_session.scalar(
+        select(ProfileActivityPreferences).where(
+            ProfileActivityPreferences.profile_id == profile_id
+        )
+    )
+    assert settings is not None and preferences is not None
+    original_school = (settings.school_start, settings.school_end)
+    original_sleep = (settings.sleep_start, settings.sleep_end)
+
+    settings.school_start = None
+    settings.school_end = None
+    await db_session.commit()
+    response = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert response.json()["reason"] == "school_schedule_missing"
+
+    settings.school_start, settings.school_end = original_school
+    settings.sleep_start = None
+    settings.sleep_end = None
+    await db_session.commit()
+    response = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert response.json()["reason"] == "sleep_schedule_missing"
+
+    settings.sleep_start, settings.sleep_end = original_sleep
+    preferences.considerations_answered = False
+    await db_session.commit()
+    response = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert response.json()["reason"] == "eligibility_unknown"
+
+    preferences.considerations_answered = True
+    await db_session.commit()
+    await add_parental_response(db_session, profile["id"], adult, reference_days=7)
+    response = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert response.json()["reason"] == "pmum_answers_ineligible"
+
+    await add_parental_response(db_session, profile["id"], adult)
+    settings.school_start = (observed - timedelta(minutes=30)).timetz().replace(tzinfo=None)
+    settings.school_end = (observed + timedelta(minutes=30)).timetz().replace(tzinfo=None)
+    await db_session.commit()
+    response = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert response.json()["reason"] == "school_period"
+    assert _inside_window(time(23, 0), time(22, 0), time(7, 0)) is True
+    assert adaptive_coordinator.calls == []
+
+
+@pytest.mark.asyncio
+async def test_coordinator_suppression_and_invalid_offer_are_controlled(
+    client, db_session, adult_session, monitoring_authorization, adaptive_coordinator, monkeypatch,
+):
+    profile, device, _adult_headers, adult, observed = await configured_profile(
+        client, db_session, adult_session, monitoring_authorization,
+    )
+    await add_parental_response(db_session, profile["id"], adult)
+    monkeypatch.setattr(
+        "app.api.routes.profile_child_offers.get_settings",
+        lambda: SimpleNamespace(adaptive_child_offers_enabled=True),
+    )
+    url = f"/api/v1/profiles/{profile['id']}/child-offers/opportunities"
+
+    adaptive_coordinator.suppression_reason = "outside_trigger"
+    suppressed = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert suppressed.status_code == 200
+    assert suppressed.json()["outcome"] == "discarded"
+    assert suppressed.json()["reason"] == "outside_trigger"
+
+    adaptive_coordinator.suppression_reason = None
+    adaptive_coordinator.offer_id_override = "not-a-uuid"
+    invalid = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert invalid.status_code == 502
+    assert invalid.json()["detail"] == {
+        "outcome": "definitive_error",
+        "code": "INVALID_COORDINATOR_OFFER",
+    }
+
+
+@pytest.mark.asyncio
+async def test_terminal_coordinator_error_conflicts_and_blocks_new_operation(
+    client, db_session, adult_session, monitoring_authorization, adaptive_coordinator, monkeypatch,
+):
+    profile, device, _adult_headers, adult, observed = await configured_profile(
+        client, db_session, adult_session, monitoring_authorization,
+    )
+    await add_parental_response(db_session, profile["id"], adult)
+    monkeypatch.setattr(
+        "app.api.routes.profile_child_offers.get_settings",
+        lambda: SimpleNamespace(adaptive_child_offers_enabled=True),
+    )
+    adaptive_coordinator.failure = ChildOffersError("CHILD_OFFERS_INVALID_REQUEST", 400)
+    payload = opportunity_payload(observed)
+    url = f"/api/v1/profiles/{profile['id']}/child-offers/opportunities"
+
+    failed = await client.post(url, headers=device, json=payload)
+    assert failed.status_code == 400
+    assert failed.json()["detail"]["outcome"] == "definitive_error"
+
+    altered = {**payload, "screen_interactive": False}
+    conflict = await client.post(url, headers=device, json=altered)
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "OPPORTUNITY_CONFLICT"
+
+    terminal = await client.post(url, headers=device, json=payload)
+    assert terminal.status_code == 409
+    assert terminal.json()["detail"]["code"] == "OPPORTUNITY_CONFLICT"
+
+    pending = await client.post(url, headers=device, json=opportunity_payload(observed))
+    assert pending.status_code == 409
+    assert pending.json()["detail"] == {
+        "outcome": "retryable_error",
+        "code": "OPPORTUNITY_PENDING",
+    }
+
+
+@pytest.mark.asyncio
+async def test_automatic_event_rejects_disabled_mismatched_and_unselected_offers(
+    client, db_session, adult_session, monitoring_authorization, adaptive_coordinator, monkeypatch,
+):
+    profile, device, _adult_headers, adult, observed = await configured_profile(
+        client, db_session, adult_session, monitoring_authorization,
+    )
+    await add_parental_response(db_session, profile["id"], adult)
+    flag = SimpleNamespace(adaptive_child_offers_enabled=True)
+    monkeypatch.setattr(
+        "app.api.routes.profile_child_offers.get_settings",
+        lambda: flag,
+    )
+    base = f"/api/v1/profiles/{profile['id']}/child-offers"
+    opened = await client.post(
+        base + "/opportunities",
+        headers=device,
+        json=opportunity_payload(observed),
+    )
+    assert opened.status_code == 200
+    offer_id = opened.json()["coordinator_offer_id"]
+    event = {
+        "request_id": f"event-{uuid.uuid4()}",
+        "profile_id": profile["id"],
+        "offer_id": offer_id,
+        "event": "delivered",
+        "occurred_at": observed.isoformat(),
+        "now": observed.isoformat(),
+        "channel": "overlay",
+    }
+
+    flag.adaptive_child_offers_enabled = False
+    disabled = await client.post(base + "/opportunities/events", headers=device, json=event)
+    assert disabled.status_code == 503
+    flag.adaptive_child_offers_enabled = True
+
+    mismatch = {**event, "request_id": f"event-{uuid.uuid4()}", "profile_id": str(uuid.uuid4())}
+    assert (
+        await client.post(base + "/opportunities/events", headers=device, json=mismatch)
+    ).status_code == 422
+
+    invalid = {**event, "request_id": f"event-{uuid.uuid4()}", "offer_id": "not-a-uuid"}
+    assert (
+        await client.post(base + "/opportunities/events", headers=device, json=invalid)
+    ).status_code == 404
+
+    selected = {
+        **event,
+        "request_id": f"event-{uuid.uuid4()}",
+        "event": "selected",
+        "channel": None,
+        "selected_activity_id": "breathing-bubble",
+    }
+    not_recorded = await client.post(
+        base + "/opportunities/events",
+        headers=device,
+        json={key: value for key, value in selected.items() if value is not None},
+    )
+    assert not_recorded.status_code == 409
+    assert not_recorded.json()["detail"]["code"] == "SELECTION_NOT_RECORDED"
+    assert adaptive_coordinator.event_calls == []
 
 
 @pytest.mark.asyncio
