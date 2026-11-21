@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime, time, timezone
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text, Time, UniqueConstraint, false, text, true
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, Time, UniqueConstraint, false, text, true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -691,6 +691,103 @@ class HistoricalSubmission(Base):
         default=utcnow,
         onupdate=utcnow,
     )
+
+
+class F12RawEvidenceCapture(Base):
+    __tablename__ = "f12_raw_evidence_captures"
+    __table_args__ = (
+        CheckConstraint("revision > 0", name="f12_raw_evidence_revision_positive"),
+        CheckConstraint("pair_count >= 0", name="f12_raw_evidence_pair_count_non_negative"),
+        CheckConstraint("total_bytes >= 0", name="f12_raw_evidence_total_bytes_non_negative"),
+        CheckConstraint(
+            "evidence_state IN ('AVAILABLE', 'UNAVAILABLE')",
+            name="f12_raw_evidence_state",
+        ),
+        CheckConstraint(
+            "receipt_status = 'RECEIVED'",
+            name="f12_raw_evidence_receipt_status",
+        ),
+        CheckConstraint(
+            "(evidence_state = 'AVAILABLE' AND unavailable_reason IS NULL AND pair_count > 0) OR "
+            "(evidence_state = 'UNAVAILABLE' AND unavailable_reason = 'NOT_EXPORTED' AND pair_count = 0 AND total_bytes = 0)",
+            name="f12_raw_evidence_state_content",
+        ),
+        UniqueConstraint(
+            "profile_id",
+            "device_id",
+            "local_date",
+            "revision",
+            name="uq_f12_raw_evidence_profile_device_date_revision",
+        ),
+        Index(
+            "ix_f12_raw_evidence_profile_date",
+            "profile_id",
+            "local_date",
+        ),
+        Index("ix_f12_raw_evidence_expires_at", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    capture_id: Mapped[str] = mapped_column(String(64), unique=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"),
+        index=True,
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"),
+        index=True,
+    )
+    local_date: Mapped[date] = mapped_column(Date)
+    time_zone: Mapped[str] = mapped_column(String(128))
+    revision: Mapped[int] = mapped_column(Integer)
+    envelope_version: Mapped[int] = mapped_column(Integer)
+    adapter_version: Mapped[str] = mapped_column(String(100))
+    evidence_state: Mapped[str] = mapped_column(String(20))
+    unavailable_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    pair_count: Mapped[int] = mapped_column(Integer)
+    total_bytes: Mapped[int] = mapped_column(BigInteger)
+    source_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    receipt_status: Mapped[str] = mapped_column(String(20), default="RECEIVED")
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    pairs: Mapped[list["F12RawEvidencePair"]] = relationship(
+        back_populates="capture",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="F12RawEvidencePair.ordinal",
+    )
+
+
+class F12RawEvidencePair(Base):
+    __tablename__ = "f12_raw_evidence_pairs"
+    __table_args__ = (
+        CheckConstraint("ordinal >= 0", name="f12_raw_evidence_pair_ordinal_non_negative"),
+        CheckConstraint("summary_size >= 0", name="f12_raw_evidence_summary_size_non_negative"),
+        CheckConstraint("events_size >= 0", name="f12_raw_evidence_events_size_non_negative"),
+        UniqueConstraint(
+            "capture_id",
+            "collector_run_id",
+            name="uq_f12_raw_evidence_capture_collector_run",
+        ),
+    )
+
+    capture_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("f12_raw_evidence_captures.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    collector_run_id: Mapped[str] = mapped_column(String(36))
+    summary_sha256: Mapped[str] = mapped_column(String(64))
+    events_sha256: Mapped[str] = mapped_column(String(64))
+    summary_size: Mapped[int] = mapped_column(BigInteger)
+    events_size: Mapped[int] = mapped_column(BigInteger)
+    summary_bytes: Mapped[bytes] = mapped_column(LargeBinary)
+    events_bytes: Mapped[bytes] = mapped_column(LargeBinary)
+    capture: Mapped[F12RawEvidenceCapture] = relationship(back_populates="pairs")
 
 
 class ProfileLinkCode(Base):
