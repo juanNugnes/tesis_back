@@ -691,6 +691,10 @@ class HistoricalSubmission(Base):
         default=utcnow,
         onupdate=utcnow,
     )
+    f12_preparation: Mapped["F12EvidencePreparation | None"] = relationship(
+        back_populates="historical_submission",
+        uselist=False,
+    )
 
 
 class F12RawEvidenceCapture(Base):
@@ -817,6 +821,16 @@ class F12EvidencePreparation(Base):
     input_fingerprint: Mapped[str] = mapped_column(String(64))
     projection_fingerprint: Mapped[str] = mapped_column(String(64))
     evidence_content_sha256: Mapped[str] = mapped_column(String(64))
+    historical_submission_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("historical_submissions.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+        index=True,
+    )
+    submission_linked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     submission_body: Mapped[dict] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql")
     )
@@ -827,6 +841,9 @@ class F12EvidencePreparation(Base):
     )
     evidence: Mapped[F12RawEvidenceCapture] = relationship(
         back_populates="preparation"
+    )
+    historical_submission: Mapped[HistoricalSubmission | None] = relationship(
+        back_populates="f12_preparation"
     )
 
 

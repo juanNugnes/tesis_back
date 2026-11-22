@@ -118,7 +118,11 @@ class HistoricalSubmissionService:
             existing = await self.repository.get_by_request_id(data.request_id)
             if existing is not None:
                 self._validate_idempotent_create(existing, prepared)
+                existing_id = existing.id
                 await self.repository.db.rollback()
+                existing = await self.repository.get(existing_id)
+                if existing is None:
+                    raise HistoricalSubmissionNotFoundError
                 return existing
 
             if (

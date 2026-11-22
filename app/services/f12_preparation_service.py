@@ -72,11 +72,11 @@ class F12PreparationService:
 
             existing = await self.repository.get_by_evidence_id(evidence_id)
             if existing is not None:
-                self._validate_existing(existing, evidence)
+                self.validate_persisted(existing, evidence)
                 await self.repository.commit()
                 return existing
 
-            self._validate_eligible(evidence)
+            self.validate_evidence_eligible(evidence)
             request_id = f"f12prep-{evidence.capture_id}"
             binding = {
                 "schema_version": 1,
@@ -162,7 +162,7 @@ class F12PreparationService:
             if existing is not None:
                 evidence = await self.repository.lock_evidence(evidence_id)
                 if evidence is not None:
-                    self._validate_existing(existing, evidence)
+                    self.validate_persisted(existing, evidence)
                     await self.repository.commit()
                     return existing
             raise F12PreparationPersistenceError from None
@@ -171,7 +171,7 @@ class F12PreparationService:
             raise F12PreparationPersistenceError from exc
 
     @staticmethod
-    def _validate_eligible(evidence: F12RawEvidenceCapture) -> None:
+    def validate_evidence_eligible(evidence: F12RawEvidenceCapture) -> None:
         if (
             evidence.expires_at is not None
             and _as_utc(evidence.expires_at) <= datetime.now(UTC)
@@ -261,7 +261,7 @@ class F12PreparationService:
         return data
 
     @staticmethod
-    def _validate_existing(
+    def validate_persisted(
         preparation: F12EvidencePreparation,
         evidence: F12RawEvidenceCapture,
     ) -> None:
