@@ -1,0 +1,20 @@
+{
+  "audit_schema": "f12-export-lineage-v1",
+  "export_adapter_version": "f12-android-export-adapter-v1-candidate",
+  "projection_bridge_version": "f12-backend-bridge-v1-candidate",
+  "projection_fingerprint": "abe2ea697146a91b2c7a2bf95787d76fe4abf71cd4f7d731874db9fa5478ae4c",
+  "originals": [
+    {
+      "collector_run_id": "e12f9120-7641-4ae2-a988-d6c43d4cfd17",
+      "event_count": 3,
+      "summary_sha256": "874fa51b2e8906f6ec9821be418495909cd225bcf9dc8b0dbe904ad1e3b51337",
+      "events_sha256": "0637cf61098ba031a104221f999af0b8639e57e70389b1d133c4030ca0b9dac1"
+    }
+  ],
+  "export_evidence_state": "PAIRS_AVAILABLE",
+  "hardware_metadata_consistent": true,
+  "hardware_metadata_available": true,
+  "device_identity_verified": false,
+  "physical_capture_verified": false,
+  "coverage_quantified": false
+}

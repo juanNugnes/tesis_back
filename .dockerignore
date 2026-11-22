@@ -8,6 +8,8 @@
 !app/**
 !alembic/
 !alembic/**
+!vendor/
+!vendor/**
 
 # Exclusiones defensivas incluso dentro de directorios permitidos.
 **/.env

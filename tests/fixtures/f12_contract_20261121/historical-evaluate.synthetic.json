@@ -1,0 +1,27 @@
+{
+  "request_id": "fixture-2026-09-01",
+  "representation": {
+    "representation_record_id": "rep-ee77550b87c422d45840797d9beaa118f79863b6350e2984feec82090bf86a52",
+    "representation_spec_id": "daily_use_duration_minutes_v2",
+    "subject_id": "series-9ce8fd01b93d83b507182157a452c8eabc1a23c7d2065c0931178a6d324264dc",
+    "phenomenon": "DAILY_USE_DURATION",
+    "interval_start": "2026-09-01T03:00:00+00:00",
+    "interval_end": "2026-09-02T03:00:00+00:00",
+    "value": 60.0,
+    "unit": "minutes",
+    "status": "OBSERVED",
+    "coverage": {
+      "value": null,
+      "basis": "daily_capture_completeness_not_quantified"
+    },
+    "quality_flags": [],
+    "provenance": {
+      "source_id": "android-usage-events",
+      "source_version": "f12-android-export-adapter-v1-candidate",
+      "source_semantics": "Interactive screen duration on assigned device; user attribution unverified",
+      "adapter_version": "v2",
+      "input_fingerprint": "11e2932b1be366309ad9f314de99b543888b227a19786f9cde260e6e2073a951"
+    },
+    "computed_at": "2026-09-02T03:02:00+00:00"
+  }
+}

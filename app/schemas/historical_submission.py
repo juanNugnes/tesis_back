@@ -12,6 +12,7 @@ from app.db.models import HistoricalSubmissionStatus
 
 HISTORICAL_MEASUREMENT_VERSION = "capture-test-v1"
 HISTORICAL_BRIDGE_VERSION = "f12-backend-bridge-v1-candidate"
+HISTORICAL_EXPORT_ADAPTER_VERSION = "f12-android-export-adapter-v1-candidate"
 HISTORICAL_REPRESENTATION_SPEC_ID = "daily_use_duration_minutes_v2"
 HISTORICAL_SOURCE_ID = "android-usage-events"
 HISTORICAL_SOURCE_SEMANTICS = (
@@ -71,7 +72,10 @@ class HistoricalProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_id: Literal[HISTORICAL_SOURCE_ID]
-    source_version: Literal[HISTORICAL_BRIDGE_VERSION]
+    source_version: Literal[
+        HISTORICAL_BRIDGE_VERSION,
+        HISTORICAL_EXPORT_ADAPTER_VERSION,
+    ]
     source_semantics: Literal[HISTORICAL_SOURCE_SEMANTICS]
     adapter_version: Literal["v2"]
     input_fingerprint: str = Field(min_length=1, max_length=256)

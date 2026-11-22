@@ -1,0 +1,52 @@
+{
+  "status": "processed",
+  "request_id": "fixture-2026-09-01",
+  "replayed": false,
+  "historical_api_version": "historical-http-v1-candidate",
+  "configuration_id": "smoke-only-not-calibrated",
+  "configuration_fingerprint": "ced67439a2bf7c4bc4a6f4fc6bec805b404f14c662a927464d026d75d8f46466",
+  "scope": "internal_technical_candidate",
+  "result": {
+    "reference": {
+      "location": null,
+      "scale": null,
+      "history_count": 0,
+      "reference_cutoff": "2026-09-01T03:00:00+00:00"
+    },
+    "evaluation": {
+      "evaluation_id": "eval-87b490f5cf664388b006c59083bf828a",
+      "subject_id": "series-9ce8fd01b93d83b507182157a452c8eabc1a23c7d2065c0931178a6d324264dc",
+      "representation_record_id": "rep-ee77550b87c422d45840797d9beaa118f79863b6350e2984feec82090bf86a52",
+      "representation_spec_id": "daily_use_duration_minutes_v2",
+      "evaluated_interval_start": "2026-09-01T03:00:00+00:00",
+      "evaluated_interval_end": "2026-09-02T03:00:00+00:00",
+      "outcome": "ABSTAIN",
+      "abstention_reason": "INSUFFICIENT_HISTORY",
+      "observed_value": 60.0,
+      "reference_location": null,
+      "reference_scale": null,
+      "reference_history_count": 0,
+      "reference_cutoff": "2026-09-01T03:00:00+00:00",
+      "detector_family": "C1_V1",
+      "detector_k": 0.5,
+      "detector_min_history": 3,
+      "threshold": 3.0,
+      "detector_statistic": null,
+      "positive_cusum": null,
+      "negative_cusum": null,
+      "analysis_version": "published-c1-smoke-v1",
+      "computed_at": "2026-11-21T17:20:01.079185+00:00"
+    },
+    "emission": {
+      "decision": "NO_EMIT",
+      "event": null
+    },
+    "next_state": {
+      "cusum_state": {
+        "positive": 0.0,
+        "negative": 0.0
+      },
+      "previous_eligible_statistic": null
+    }
+  }
+}

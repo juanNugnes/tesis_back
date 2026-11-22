@@ -760,6 +760,11 @@ class F12RawEvidenceCapture(Base):
         lazy="selectin",
         order_by="F12RawEvidencePair.ordinal",
     )
+    preparation: Mapped["F12EvidencePreparation | None"] = relationship(
+        back_populates="evidence",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class F12RawEvidencePair(Base):
@@ -788,6 +793,41 @@ class F12RawEvidencePair(Base):
     summary_bytes: Mapped[bytes] = mapped_column(LargeBinary)
     events_bytes: Mapped[bytes] = mapped_column(LargeBinary)
     capture: Mapped[F12RawEvidenceCapture] = relationship(back_populates="pairs")
+
+
+class F12EvidencePreparation(Base):
+    """Immutable audit record produced locally from one raw evidence revision."""
+
+    __tablename__ = "f12_evidence_preparations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("f12_raw_evidence_captures.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    request_id: Mapped[str] = mapped_column(String(128), unique=True)
+    preparer_commit: Mapped[str] = mapped_column(String(40))
+    measurement_version: Mapped[str] = mapped_column(String(100))
+    bridge_version: Mapped[str] = mapped_column(String(100))
+    export_adapter_version: Mapped[str] = mapped_column(String(100))
+    tzdata_version: Mapped[str] = mapped_column(String(50))
+    series_key: Mapped[str] = mapped_column(String(71), index=True)
+    representation_record_id: Mapped[str] = mapped_column(String(68), unique=True)
+    input_fingerprint: Mapped[str] = mapped_column(String(64))
+    projection_fingerprint: Mapped[str] = mapped_column(String(64))
+    evidence_content_sha256: Mapped[str] = mapped_column(String(64))
+    submission_body: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    audit: Mapped[dict] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+    )
+    evidence: Mapped[F12RawEvidenceCapture] = relationship(
+        back_populates="preparation"
+    )
 
 
 class ProfileLinkCode(Base):

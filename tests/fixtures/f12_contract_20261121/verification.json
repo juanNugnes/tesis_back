@@ -1,0 +1,74 @@
+{
+  "status": "PASS",
+  "scope": "offline_contract_and_local_TestClient_only",
+  "backend_commit": "74534553f6154a3ad7d2aded8933e2c9b954cb8a",
+  "tzdata_version": "2026.6",
+  "checks": [
+    {
+      "check": "current_backend_rejects_export_source_version",
+      "passed": true
+    },
+    {
+      "check": "proposed_allowlist_accepts_export",
+      "passed": true
+    },
+    {
+      "check": "legacy_bridge_still_accepted",
+      "passed": true
+    },
+    {
+      "check": "unknown_source_version_rejected",
+      "passed": true
+    },
+    {
+      "check": "missing_backend_wrapper_rejected",
+      "passed": true
+    },
+    {
+      "check": "coverage_not_promoted_to_complete",
+      "passed": true
+    },
+    {
+      "check": "physical_and_personal_verification_not_inferred",
+      "passed": true
+    },
+    {
+      "check": "subject_id_matches_when_binding_and_tzdata_match",
+      "passed": true
+    },
+    {
+      "check": "representation_record_id_matches",
+      "passed": true
+    },
+    {
+      "check": "backend_keeps_export_fingerprint_and_source_version",
+      "passed": true
+    },
+    {
+      "check": "partial_local_day_rejected_by_backend_preparation",
+      "passed": true
+    },
+    {
+      "check": "prepared_payload_accepted_by_local_analytics",
+      "passed": true
+    },
+    {
+      "check": "first_day_abstains",
+      "passed": true
+    },
+    {
+      "check": "controlled_28_days_open_without_c1_evidence",
+      "passed": true
+    },
+    {
+      "check": "unverified_day_does_not_open_alert",
+      "passed": true
+    },
+    {
+      "check": "adult_replay_after_app_recreation",
+      "passed": true
+    }
+  ],
+  "production_code_modified": false,
+  "backend_database_android_aws_validated": false
+}
