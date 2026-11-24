@@ -1,5 +1,7 @@
 from app.db.models.entities import (
     ActivityInterest,
+    AdultMessageEvaluationJob,
+    AdultMessageEvaluationJobStatus,
     ActivityConsiderationType,
     ActivityOffer,
     ChildOfferOperation,
@@ -57,6 +59,8 @@ from app.db.models.entities import (
 
 __all__ = [
     "Profile",
+    "AdultMessageEvaluationJob",
+    "AdultMessageEvaluationJobStatus",
     "AdultAccount",
     "AdultProfileLink",
     "RepresentativeVerification",

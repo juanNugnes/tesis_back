@@ -143,6 +143,14 @@ class HistoricalSubmissionStatus(str, enum.Enum):
     TECHNICAL_ERROR = "TECHNICAL_ERROR"
 
 
+class AdultMessageEvaluationJobStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    SENDING = "SENDING"
+    PROCESSED = "PROCESSED"
+    CONFLICT = "CONFLICT"
+    TECHNICAL_ERROR = "TECHNICAL_ERROR"
+
+
 class UsageMetricStatus(str, enum.Enum):
     MEASURED = "MEASURED"
     UNAVAILABLE = "UNAVAILABLE"
@@ -694,6 +702,77 @@ class HistoricalSubmission(Base):
     f12_preparation: Mapped["F12EvidencePreparation | None"] = relationship(
         back_populates="historical_submission",
         uselist=False,
+    )
+
+
+class AdultMessageEvaluationJob(Base):
+    """Frozen, development-only transport operation for a fictitious fixture."""
+
+    __tablename__ = "adult_message_evaluation_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "attempts >= 0",
+            name="ck_adult_message_evaluation_jobs_attempts_non_negative",
+        ),
+        Index(
+            "ix_adult_message_evaluation_jobs_profile_status",
+            "profile_id",
+            "status",
+        ),
+        Index(
+            "ix_adult_message_evaluation_jobs_series_date",
+            "series_id",
+            "evaluation_date",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    fixture_id: Mapped[str] = mapped_column(String(128), unique=True)
+    fixture_sha256: Mapped[str] = mapped_column(String(64))
+    request_id: Mapped[str] = mapped_column(String(128), unique=True)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    series_id: Mapped[str] = mapped_column(String(128), index=True)
+    evaluation_date: Mapped[date] = mapped_column(Date)
+    payload: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[AdultMessageEvaluationJobStatus] = mapped_column(
+        Enum(
+            AdultMessageEvaluationJobStatus,
+            name="adult_message_evaluation_job_status",
+        ),
+        default=AdultMessageEvaluationJobStatus.PENDING,
+        index=True,
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    analytics_response: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+    )
+    analytics_evaluation_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    analytics_card_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    analytics_card_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    analytics_replayed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    retryable: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
 
