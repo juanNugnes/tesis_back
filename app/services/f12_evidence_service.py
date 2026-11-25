@@ -9,7 +9,12 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from app.db.models import F12RawEvidenceCapture, F12RawEvidencePair
+from app.db.models import (
+    F12ProcessingJob,
+    F12ProcessingJobStatus,
+    F12RawEvidenceCapture,
+    F12RawEvidencePair,
+)
 from app.repositories.f12_evidence_repository import F12EvidenceRepository
 from app.schemas.f12_evidence import F12EvidenceReceipt
 from app.services.f12_evidence_validator import (
@@ -184,6 +189,26 @@ class F12EvidenceService:
                 )
                 for ordinal, pair in enumerate(evidence.pairs)
             ]
+            if manifest.evidence_state == "AVAILABLE" and manifest.revision == 1:
+                capture.processing_job = F12ProcessingJob(
+                    status=F12ProcessingJobStatus.PENDING,
+                )
+            else:
+                code = (
+                    "unavailable_policy_undefined"
+                    if manifest.evidence_state == "UNAVAILABLE"
+                    else "corrected_revision_policy_undefined"
+                )
+                capture.processing_job = F12ProcessingJob(
+                    status=F12ProcessingJobStatus.BLOCKED,
+                    retryable=False,
+                    last_error_code=code,
+                    last_error_message=(
+                        "UNAVAILABLE evidence is retained but is not processed"
+                        if manifest.evidence_state == "UNAVAILABLE"
+                        else "Corrected evidence revisions are retained but are not processed"
+                    ),
+                )
             await self.repository.add(capture)
             await self.repository.commit()
             return F12EvidenceIngestResult(self._receipt(capture), created=True)

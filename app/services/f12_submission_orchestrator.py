@@ -179,6 +179,49 @@ class F12SubmissionOrchestrator:
             await self.repository.rollback()
             raise F12SubmissionPersistenceError from exc
 
+    async def resume_pending(
+        self,
+        *,
+        preparation_id: uuid.UUID,
+    ) -> HistoricalSubmission:
+        """Recover the safe pre-transport PENDING crash window."""
+        try:
+            binding, device, _data = await self._load_eligible(preparation_id)
+            existing = await self.historical_service.repository.get_by_request_id(
+                binding.request_id
+            )
+            if existing is None:
+                raise F12SubmissionNotCreatedError
+            self._validate_submission(existing, binding=binding)
+            await self.repository.link_submission(
+                preparation_id=binding.preparation_id,
+                submission=existing,
+                linked_at=datetime.now(UTC),
+            )
+            return await self.historical_service.resume_pending(
+                submission_id=existing.id,
+                profile_id=binding.profile_id,
+                device_id=device.id,
+            )
+        except F12PreparationIneligibleError:
+            await self.repository.rollback()
+            raise
+        except F12PreparationLinkConflictError:
+            await self.repository.rollback()
+            raise F12SubmissionLinkConflictError from None
+        except (
+            F12SubmissionPreparationNotFoundError,
+            F12SubmissionAuthorizationError,
+            F12SubmissionContractError,
+            F12SubmissionLinkConflictError,
+            F12SubmissionNotCreatedError,
+        ):
+            await self.repository.rollback()
+            raise
+        except SQLAlchemyError as exc:
+            await self.repository.rollback()
+            raise F12SubmissionPersistenceError from exc
+
     async def _load_eligible(
         self,
         preparation_id: uuid.UUID,

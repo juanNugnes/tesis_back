@@ -191,6 +191,34 @@ class HistoricalSubmissionService:
                 already_locked=locked,
             )
 
+    async def resume_pending(
+        self,
+        *,
+        submission_id: uuid.UUID,
+        profile_id: uuid.UUID,
+        device_id: uuid.UUID,
+    ) -> HistoricalSubmission:
+        """Resume a row committed before transport; never accepts SENDING."""
+        submission = await self.repository.get(submission_id)
+        if submission is None:
+            raise HistoricalSubmissionNotFoundError
+        self._validate_access(submission, profile_id=profile_id, device_id=device_id)
+        async with _SeriesLockRegistry.get(submission.series_key):
+            await self.repository.lock_device(device_id)
+            locked = await self.repository.lock_submission(submission_id)
+            if locked is None:
+                await self.repository.db.rollback()
+                raise HistoricalSubmissionNotFoundError
+            self._validate_access(locked, profile_id=profile_id, device_id=device_id)
+            if locked.status != HistoricalSubmissionStatus.PENDING:
+                await self.repository.db.rollback()
+                raise HistoricalSubmissionRetryError
+            return await self._send_locked(
+                submission_id,
+                allowed_status=HistoricalSubmissionStatus.PENDING,
+                already_locked=locked,
+            )
+
     async def _send_locked(
         self,
         submission_id: uuid.UUID,

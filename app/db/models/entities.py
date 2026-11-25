@@ -143,6 +143,15 @@ class HistoricalSubmissionStatus(str, enum.Enum):
     TECHNICAL_ERROR = "TECHNICAL_ERROR"
 
 
+class F12ProcessingJobStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    BLOCKED = "BLOCKED"
+    TECHNICAL_ERROR = "TECHNICAL_ERROR"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+
+
 class AdultMessageEvaluationJobStatus(str, enum.Enum):
     PENDING = "PENDING"
     SENDING = "SENDING"
@@ -847,6 +856,62 @@ class F12RawEvidenceCapture(Base):
         back_populates="evidence",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+    processing_job: Mapped["F12ProcessingJob | None"] = relationship(
+        back_populates="evidence",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class F12ProcessingJob(Base):
+    """Durable orchestration state for one immutable raw evidence revision."""
+
+    __tablename__ = "f12_processing_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "attempts >= 0",
+            name="ck_f12_processing_jobs_attempts_non_negative",
+        ),
+        Index("ix_f12_processing_jobs_status_retry", "status", "next_attempt_at"),
+        Index("ix_f12_processing_jobs_lease", "lease_expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("f12_raw_evidence_captures.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    status: Mapped[F12ProcessingJobStatus] = mapped_column(
+        Enum(F12ProcessingJobStatus, name="f12_processing_job_status"),
+        default=F12ProcessingJobStatus.PENDING,
+        index=True,
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retryable: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    evidence: Mapped[F12RawEvidenceCapture] = relationship(
+        back_populates="processing_job"
     )
 
 

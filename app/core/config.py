@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     device_bootstrap_ttl_minutes: int = Field(default=10, gt=0)
     usage_snapshot_retention_days: int | None = Field(default=None, gt=0)
     f12_evidence_retention_days: int | None = Field(default=None, gt=0)
+    f12_automatic_processing_enabled: bool = False
+    f12_automatic_processing_poll_seconds: float = Field(default=5.0, gt=0)
+    f12_automatic_processing_lease_seconds: int = Field(default=300, gt=0)
+    f12_automatic_processing_retry_seconds: int = Field(default=30, gt=0)
+    f12_automatic_processing_max_attempts: int = Field(default=3, gt=0)
     analytics_service_url: str = "http://analytics:8765"
     analytics_service_token: SecretStr | None = None
     analytics_timeout_seconds: float = Field(default=5.0, gt=0)
