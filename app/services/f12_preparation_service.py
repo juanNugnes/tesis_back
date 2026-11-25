@@ -22,6 +22,7 @@ from app.services.f12_published_runner import (
     F12PublishedPreparationError,
     run_published_preparer,
 )
+from app.services.f12_operational_quality import F12OperationalQualityPolicy
 from app.services.historical_submission_service import HistoricalSubmissionService
 
 
@@ -77,6 +78,16 @@ class F12PreparationService:
                 return existing
 
             self.validate_evidence_eligible(evidence)
+            latest_revision = await self.repository.latest_revision(
+                profile_id=evidence.profile_id,
+                device_id=evidence.device_id,
+                local_date=evidence.local_date,
+            )
+            if latest_revision != evidence.revision:
+                raise F12PreparationIneligibleError(
+                    "corrected_revision_pending",
+                    "A later evidence revision exists and cannot be reconciled automatically",
+                )
             request_id = f"f12prep-{evidence.capture_id}"
             binding = {
                 "schema_version": 1,
@@ -128,7 +139,15 @@ class F12PreparationService:
                     "Published and backend historical identities do not match"
                 )
 
+            preparation_id = uuid.uuid4()
+            evaluated_at = datetime.now(UTC)
+            quality = F12OperationalQualityPolicy.evaluate(
+                evidence=evidence,
+                prepared=data,
+                correction_pending=False,
+            )
             preparation = F12EvidencePreparation(
+                id=preparation_id,
                 evidence_id=evidence.id,
                 request_id=request_id,
                 preparer_commit=PUBLISHED_PREPARER_COMMIT,
@@ -142,7 +161,14 @@ class F12PreparationService:
                 projection_fingerprint=audit["projection_fingerprint"],
                 evidence_content_sha256=evidence.content_sha256,
                 submission_body=data.model_dump(mode="json"),
-                audit=audit,
+                audit={
+                    **audit,
+                    "operational_quality": quality.audit_payload(
+                        evidence=evidence,
+                        preparation_id=preparation_id,
+                        evaluated_at=evaluated_at,
+                    ),
+                },
             )
             await self.repository.add(preparation)
             await self.repository.commit()

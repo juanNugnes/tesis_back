@@ -36,9 +36,11 @@ def declaration_data(
     assignment_verified=True,
     shared_phone=False,
     context_declared=False,
+    time_zone="UTC",
 ):
     return AdultWeeklyDeclarationCreate(
         device_id=device_id,
+        time_zone=time_zone,
         effective_from=effective_from,
         effective_to=effective_to,
         assignment_verified=assignment_verified,
@@ -101,7 +103,7 @@ async def test_complete_declaration_history_resolves_three_contract_conditions(
         "CONTEXT_HISTORY_MISSING",
     }
     assert not declaration_codes.intersection(item.code for item in result.blockers)
-    assert "QUALITY_POLICY_UNDEFINED" in {item.code for item in result.blockers}
+    assert "F12_QUALITY_NOT_VERIFIED" in {item.code for item in result.blockers}
     assert result.evaluation_ready is False
 
 
@@ -242,6 +244,7 @@ async def test_adult_can_create_list_revise_and_revoke_via_minimal_api(
     today = datetime.now(UTC).date()
     first_payload = {
         "device_id": device["id"],
+        "time_zone": "UTC",
         "effective_from": today.isoformat(),
         "effective_to": None,
         "assignment_verified": True,
@@ -291,6 +294,7 @@ async def test_api_rejects_retroactive_wrong_device_and_unauthorized_access(
     today = datetime.now(UTC).date()
     base = {
         "device_id": device["id"],
+        "time_zone": "UTC",
         "effective_from": today.isoformat(),
         "effective_to": None,
         "assignment_verified": True,
@@ -345,3 +349,127 @@ async def test_verified_adult_without_monitoring_consent_is_rejected(
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Monitoring authorization is not active"
+
+
+@pytest.mark.asyncio
+async def test_creation_uses_buenos_aires_local_date_at_utc_day_boundary(db_session):
+    profile, device = await create_profile(db_session)
+    adult = AdultAccount(email=f"local-date-{uuid.uuid4()}@example.com")
+    db_session.add(adult)
+    await db_session.flush()
+    service = AdultWeeklyDeclarationService(
+        AdultWeeklyDeclarationRepository(db_session)
+    )
+    instant = datetime(2026, 11, 26, 0, 30, tzinfo=UTC)
+
+    declaration = await service.create(
+        profile_id=profile.id,
+        adult=adult,
+        data=declaration_data(
+            device.id,
+            effective_from=datetime(2026, 11, 25).date(),
+            effective_to=None,
+            time_zone="America/Argentina/Buenos_Aires",
+        ),
+        now=instant,
+    )
+
+    assert declaration.effective_from.isoformat() == "2026-11-25"
+    assert declaration.time_zone == "America/Argentina/Buenos_Aires"
+    assert declaration.created_at.replace(tzinfo=UTC) == instant
+
+
+@pytest.mark.asyncio
+async def test_local_midnight_rejects_previous_day_and_accepts_current_day(db_session):
+    profile, device = await create_profile(db_session)
+    adult = AdultAccount(email=f"midnight-{uuid.uuid4()}@example.com")
+    db_session.add(adult)
+    await db_session.flush()
+    service = AdultWeeklyDeclarationService(
+        AdultWeeklyDeclarationRepository(db_session)
+    )
+    after_midnight = datetime(2026, 11, 26, 3, 1, tzinfo=UTC)
+
+    with pytest.raises(AdultWeeklyDeclarationDateError):
+        await service.create(
+            profile_id=profile.id,
+            adult=adult,
+            data=declaration_data(
+                device.id,
+                effective_from=datetime(2026, 11, 25).date(),
+                effective_to=None,
+                time_zone="America/Argentina/Buenos_Aires",
+            ),
+            now=after_midnight,
+        )
+    accepted = await service.create(
+        profile_id=profile.id,
+        adult=adult,
+        data=declaration_data(
+            device.id,
+            effective_from=datetime(2026, 11, 26).date(),
+            effective_to=None,
+            time_zone="America/Argentina/Buenos_Aires",
+        ),
+        now=after_midnight,
+    )
+    assert accepted.effective_from.isoformat() == "2026-11-26"
+
+
+@pytest.mark.asyncio
+async def test_revocation_uses_declaration_zone_and_preserves_utc_timestamp(db_session):
+    profile, device = await create_profile(db_session)
+    adult = AdultAccount(email=f"local-revoke-{uuid.uuid4()}@example.com")
+    db_session.add(adult)
+    await db_session.flush()
+    service = AdultWeeklyDeclarationService(
+        AdultWeeklyDeclarationRepository(db_session)
+    )
+    declaration = await service.create(
+        profile_id=profile.id,
+        adult=adult,
+        data=declaration_data(
+            device.id,
+            effective_from=datetime(2026, 11, 25).date(),
+            effective_to=None,
+            time_zone="America/Argentina/Buenos_Aires",
+        ),
+        now=datetime(2026, 11, 25, 15, 0, tzinfo=UTC),
+    )
+    revoked_at = datetime(2026, 11, 26, 2, 30, tzinfo=UTC)
+
+    await service.revoke(
+        profile_id=profile.id,
+        declaration_id=declaration.id,
+        adult=adult,
+        now=revoked_at,
+    )
+
+    assert declaration.revoked_effective_date.isoformat() == "2026-11-25"
+    assert declaration.revoked_at.replace(tzinfo=UTC) == revoked_at
+
+
+@pytest.mark.asyncio
+async def test_creation_uses_declared_non_argentina_time_zone(db_session):
+    profile, device = await create_profile(db_session)
+    adult = AdultAccount(email=f"tokyo-{uuid.uuid4()}@example.com")
+    db_session.add(adult)
+    await db_session.flush()
+    instant = datetime(2026, 11, 25, 15, 30, tzinfo=UTC)
+
+    declaration = await AdultWeeklyDeclarationService(
+        AdultWeeklyDeclarationRepository(db_session)
+    ).create(
+        profile_id=profile.id,
+        adult=adult,
+        data=declaration_data(
+            device.id,
+            effective_from=datetime(2026, 11, 26).date(),
+            effective_to=None,
+            time_zone="Asia/Tokyo",
+        ),
+        now=instant,
+    )
+
+    assert declaration.effective_from.isoformat() == "2026-11-26"
+    assert declaration.time_zone == "Asia/Tokyo"

@@ -119,6 +119,11 @@ async def revoke_adult_weekly_declaration(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Declaration not found",
         ) from None
+    except AdultWeeklyDeclarationDateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from None
     except AdultWeeklyDeclarationPersistenceError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

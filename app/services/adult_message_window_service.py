@@ -20,6 +20,9 @@ from app.schemas.adult_message_window import (
     AdultMessageWindowDiagnostic,
 )
 from app.schemas.historical_submission import HistoricalSubmissionCreate
+from app.services.f12_operational_quality import (
+    F12_OPERATIONAL_QUALITY_POLICY_VERSION,
+)
 
 
 class AdultMessageWindowProfileNotFoundError(Exception):
@@ -64,6 +67,7 @@ class AdultMessageWindowService:
             date_from=window_start,
             date_to=window_end,
         )
+        consents = await self.repository.list_usage_monitoring_consents(profile_id)
         candidates = self._series_candidates(evidence)
         selected = candidates[0] if len(candidates) == 1 else None
 
@@ -97,6 +101,7 @@ class AdultMessageWindowService:
         declarations = self._declarations(
             contexts,
             weekly_declarations,
+            consents,
             selected=selected,
             dates=dates,
             current_device=current_device,
@@ -256,7 +261,6 @@ class AdultMessageWindowService:
             evidence_id=latest.id,
             revision=latest.revision,
             available_revisions=revisions,
-            quality_verified=False,
             candidate_evidence_count=len(all_evidence),
         )
         if latest.revision != 1:
@@ -348,6 +352,7 @@ class AdultMessageWindowService:
             and submission.status == HistoricalSubmissionStatus.PROCESSED
             else None
         )
+        quality = cls._quality_decision(latest, preparation)
         return AdultMessageWindowDay(
             **common,
             f12_status=representation.status,
@@ -361,8 +366,12 @@ class AdultMessageWindowService:
             historical_submission_id=submission.id if submission else None,
             historical_submission_status=(submission.status.value if submission else None),
             c1_evaluation_id=c1_id,
+            quality_verified=quality[0],
+            quality_policy_version=quality[1],
+            quality_reason_codes=quality[2],
+            quality_evaluated_at=quality[3],
             problems=[
-                "QUALITY_POLICY_UNDEFINED",
+                *([] if quality[0] else [f"F12_QUALITY:{code}" for code in quality[2]]),
                 *[
                     f"F12_QUALITY_FLAG:{flag}"
                     for flag in representation.quality_flags
@@ -402,6 +411,7 @@ class AdultMessageWindowService:
     def _declarations(
         contexts,
         weekly_declarations,
+        consents,
         *,
         selected,
         dates,
@@ -419,7 +429,9 @@ class AdultMessageWindowService:
         relevant = [
             item
             for item in weekly_declarations
-            if selected is not None and item.device_id == selected.device_id
+            if selected is not None
+            and item.device_id == selected.device_id
+            and item.time_zone == selected.time_zone
         ]
         return AdultMessageDeclarationDiagnostic(
             assignment=AdultMessageWindowService._declaration_coverage(
@@ -449,6 +461,11 @@ class AdultMessageWindowService:
                 current_state_present=bool(context_records),
                 missing_problem="CONTEXT_HISTORY_MISSING",
                 changed_problem="CONTEXT_CHANGED_WITHIN_WINDOW",
+            ),
+            consent=AdultMessageWindowService._consent_coverage(
+                consents,
+                dates,
+                time_zone=selected.time_zone if selected is not None else None,
             ),
             context_records=context_records,
         )
@@ -507,6 +524,71 @@ class AdultMessageWindowService:
         )
 
     @staticmethod
+    def _consent_coverage(consents, dates, *, time_zone):
+        if time_zone is None:
+            return AdultMessageHistoricalDeclaration(
+                contract_value=None,
+                historical_records_present=bool(consents),
+                complete_for_window=False,
+                current_state_present=False,
+                covered_dates=[],
+                missing_dates=list(dates),
+                revisions=[],
+                problem="CONSENT_HISTORY_MISSING",
+            )
+        from zoneinfo import ZoneInfo
+
+        zone = ZoneInfo(time_zone)
+        covered_dates = []
+        for day in dates:
+            start = datetime.combine(day, datetime.min.time(), tzinfo=zone).astimezone(UTC)
+            end = datetime.combine(
+                day + timedelta(days=1), datetime.min.time(), tzinfo=zone
+            ).astimezone(UTC)
+            intervals = sorted(
+                [
+                    (
+                        AdultMessageWindowService._utc(item.granted_at),
+                        (
+                            AdultMessageWindowService._utc(item.revoked_at)
+                            if item.revoked_at is not None
+                            else None
+                        ),
+                    )
+                    for item in consents
+                    if AdultMessageWindowService._utc(item.granted_at) < end
+                    and (
+                        item.revoked_at is None
+                        or AdultMessageWindowService._utc(item.revoked_at) > start
+                    )
+                ],
+                key=lambda item: item[0],
+            )
+            covered_until = start
+            for interval_start, interval_end in intervals:
+                if interval_start > covered_until:
+                    break
+                if interval_end is None:
+                    covered_until = end
+                    break
+                covered_until = max(covered_until, interval_end)
+                if covered_until >= end:
+                    break
+            if covered_until >= end:
+                covered_dates.append(day)
+        missing_dates = [day for day in dates if day not in covered_dates]
+        return AdultMessageHistoricalDeclaration(
+            contract_value=True if not missing_dates else None,
+            historical_records_present=bool(consents),
+            complete_for_window=not missing_dates,
+            current_state_present=any(item.revoked_at is None for item in consents),
+            covered_dates=covered_dates,
+            missing_dates=missing_dates,
+            revisions=[],
+            problem="CONSENT_HISTORY_MISSING" if missing_dates else None,
+        )
+
+    @staticmethod
     def _blockers(days, candidates, selected, declarations):
         blockers = []
         if selected is None:
@@ -545,17 +627,22 @@ class AdultMessageWindowService:
                     detail="Corrected revisions cannot be selected under the current policy",
                 )
             )
-        blockers.append(
-            AdultMessageWindowBlocker(
-                code="QUALITY_POLICY_UNDEFINED",
-                dates=[item.date for item in days],
-                detail="quality_verified remains false until a verifiable policy is agreed",
+        unverified_quality = [item.date for item in days if not item.quality_verified]
+        if unverified_quality:
+            blockers.append(
+                AdultMessageWindowBlocker(
+                    code="F12_QUALITY_NOT_VERIFIED",
+                    dates=unverified_quality,
+                    detail=(
+                        "One or more daily originals fail the operational quality policy"
+                    ),
+                )
             )
-        )
         for declaration in (
             declarations.assignment,
             declarations.shared_phone,
             declarations.family_context,
+            declarations.consent,
         ):
             if declaration.problem is not None:
                 blockers.append(
@@ -568,6 +655,58 @@ class AdultMessageWindowService:
                     )
                 )
         return blockers
+
+    @staticmethod
+    def _quality_decision(evidence, preparation):
+        raw = preparation.audit.get("operational_quality")
+        if not isinstance(raw, dict):
+            return False, None, ["QUALITY_NOT_EVALUATED"], None
+        policy = raw.get("policy_version")
+        reasons = raw.get("reason_codes")
+        checks = raw.get("checks")
+        required_checks = (
+            "original_integrity",
+            "authenticated_binding",
+            "local_day_closed",
+            "captured_next_local_day",
+            "initial_state_known",
+            "continuous_query_coverage",
+            "device_lifecycle_clear",
+            "reconstruction_valid",
+            "revision_unambiguous",
+        )
+        bindings_match = (
+            raw.get("schema_version") == 1
+            and policy == F12_OPERATIONAL_QUALITY_POLICY_VERSION
+            and raw.get("evidence_id") == str(evidence.id)
+            and raw.get("capture_id") == evidence.capture_id
+            and raw.get("preparation_id") == str(preparation.id)
+            and raw.get("profile_id") == str(evidence.profile_id)
+            and raw.get("device_id") == str(evidence.device_id)
+            and raw.get("local_date") == evidence.local_date.isoformat()
+            and raw.get("time_zone") == evidence.time_zone
+            and raw.get("revision") == evidence.revision
+            and raw.get("evidence_content_sha256") == evidence.content_sha256
+            and isinstance(reasons, list)
+            and all(isinstance(item, str) and item for item in reasons)
+            and isinstance(checks, dict)
+            and all(type(checks.get(name)) is bool for name in required_checks)
+        )
+        try:
+            evaluated_at = datetime.fromisoformat(raw["evaluated_at"])
+            if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            bindings_match = False
+            evaluated_at = None
+        if not bindings_match or type(raw.get("quality_verified")) is not bool:
+            return False, policy if isinstance(policy, str) else None, ["QUALITY_AUDIT_INVALID"], evaluated_at
+        verified = (
+            raw["quality_verified"] is True
+            and reasons == ["QUALITY_VERIFIED"]
+            and all(checks.get(name) is True for name in required_checks)
+        )
+        return verified, policy, list(reasons), evaluated_at
 
     @staticmethod
     def _utc(value: datetime) -> datetime:

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -44,6 +44,22 @@ class F12PreparationRepository:
                 F12EvidencePreparation.evidence_id == evidence_id
             )
         )
+
+    async def latest_revision(
+        self,
+        *,
+        profile_id: uuid.UUID,
+        device_id: uuid.UUID,
+        local_date,
+    ) -> int | None:
+        value = await self.db.scalar(
+            select(func.max(F12RawEvidenceCapture.revision)).where(
+                F12RawEvidenceCapture.profile_id == profile_id,
+                F12RawEvidenceCapture.device_id == device_id,
+                F12RawEvidenceCapture.local_date == local_date,
+            )
+        )
+        return int(value) if value is not None else None
 
     async def lock_by_id(
         self,

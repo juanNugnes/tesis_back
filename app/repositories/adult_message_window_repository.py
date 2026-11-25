@@ -10,6 +10,9 @@ from sqlalchemy.orm import selectinload
 from app.db.models import (
     AdultWeeklyDeclaration,
     AutomaticOfferSettings,
+    Consent,
+    ConsentPurpose,
+    ConsentPurposeType,
     Device,
     F12EvidencePreparation,
     F12RawEvidenceCapture,
@@ -100,6 +103,21 @@ class AdultMessageWindowRepository:
             .order_by(AdultWeeklyDeclaration.revision.asc())
         )
         return list((await self.db.scalars(query)).all())
+
+    async def list_usage_monitoring_consents(
+        self,
+        profile_id: uuid.UUID,
+    ) -> list[Consent]:
+        query = (
+            select(Consent)
+            .join(ConsentPurpose, ConsentPurpose.consent_id == Consent.id)
+            .where(
+                Consent.profile_id == profile_id,
+                ConsentPurpose.purpose == ConsentPurposeType.USAGE_MONITORING,
+            )
+            .order_by(Consent.granted_at.asc(), Consent.id.asc())
+        )
+        return list((await self.db.scalars(query)).unique().all())
 
     async def has_current_shared_phone_setting(self, profile_id: uuid.UUID) -> bool:
         return (

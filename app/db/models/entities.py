@@ -634,6 +634,7 @@ class AdultWeeklyDeclaration(Base):
         ForeignKey("adult_accounts.id", ondelete="RESTRICT"), index=True
     )
     revision: Mapped[int] = mapped_column(Integer)
+    time_zone: Mapped[str | None] = mapped_column(String(128), nullable=True)
     effective_from: Mapped[date] = mapped_column(Date)
     effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     assignment_verified: Mapped[bool] = mapped_column(Boolean)

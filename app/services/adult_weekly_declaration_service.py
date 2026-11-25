@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -41,9 +42,10 @@ class AdultWeeklyDeclarationService:
         now: datetime | None = None,
     ) -> AdultWeeklyDeclaration:
         now = self._utc(now or datetime.now(UTC))
-        if data.effective_from < now.date():
+        local_today = now.astimezone(ZoneInfo(data.time_zone)).date()
+        if data.effective_from < local_today:
             raise AdultWeeklyDeclarationDateError(
-                "effective_from cannot precede the declaration date"
+                "effective_from cannot precede the local declaration date"
             )
         try:
             profile = await self.repository.lock_profile(profile_id)
@@ -56,6 +58,7 @@ class AdultWeeklyDeclarationService:
                 device_id=data.device_id,
                 created_by_adult_id=adult.id,
                 revision=await self.repository.next_revision(profile_id),
+                time_zone=data.time_zone,
                 effective_from=data.effective_from,
                 effective_to=data.effective_to,
                 assignment_verified=data.assignment_verified,
@@ -104,13 +107,22 @@ class AdultWeeklyDeclarationService:
             if declaration is None:
                 raise AdultWeeklyDeclarationNotFoundError
             if declaration.revoked_at is None:
+                if declaration.time_zone is None:
+                    raise AdultWeeklyDeclarationDateError(
+                        "Stored declaration has no auditable local time zone"
+                    )
                 declaration.revoked_at = now
-                declaration.revoked_effective_date = now.date()
+                declaration.revoked_effective_date = now.astimezone(
+                    ZoneInfo(declaration.time_zone)
+                ).date()
                 declaration.revoked_by_adult_id = adult.id
                 await self.repository.commit()
                 await self.repository.refresh(declaration)
             return declaration
-        except AdultWeeklyDeclarationNotFoundError:
+        except (
+            AdultWeeklyDeclarationNotFoundError,
+            AdultWeeklyDeclarationDateError,
+        ):
             await self.repository.rollback()
             raise
         except SQLAlchemyError as exc:

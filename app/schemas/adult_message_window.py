@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 F12DayStatus = Literal["OBSERVED", "OBSERVED_ZERO", "MISSING", "NOT_APPLICABLE"]
@@ -36,7 +36,10 @@ class AdultMessageWindowDay(_DiagnosticModel):
     f12_status: F12DayStatus
     f12_quality_flags: list[str]
     minutes: float | None
-    quality_verified: Literal[False] = False
+    quality_verified: bool = False
+    quality_policy_version: str | None = None
+    quality_reason_codes: list[str] = Field(default_factory=list)
+    quality_evaluated_at: datetime | None = None
     preparation_id: uuid.UUID | None
     historical_submission_id: uuid.UUID | None
     historical_submission_status: str | None
@@ -66,6 +69,7 @@ class AdultMessageDeclarationDiagnostic(_DiagnosticModel):
     assignment: AdultMessageHistoricalDeclaration
     shared_phone: AdultMessageHistoricalDeclaration
     family_context: AdultMessageHistoricalDeclaration
+    consent: AdultMessageHistoricalDeclaration
     context_records: list[AdultMessageContextRecord]
 
 

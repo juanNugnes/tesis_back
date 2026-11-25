@@ -8,8 +8,13 @@ from sqlalchemy import func, select
 from app.db.models import (
     AdultAccount,
     AdultMessageEvaluationJob,
+    AdultWeeklyDeclaration,
     AutomaticOfferSettings,
     Avatar,
+    Consent,
+    ConsentPurpose,
+    ConsentPurposeType,
+    ConsentStatus,
     Device,
     F12EvidencePreparation,
     F12RawEvidenceCapture,
@@ -34,6 +39,9 @@ from app.services.adult_message_window_service import (
     AdultMessageWindowDateError,
     AdultMessageWindowProfileNotFoundError,
     AdultMessageWindowService,
+)
+from app.services.f12_operational_quality import (
+    F12_OPERATIONAL_QUALITY_POLICY_VERSION,
 )
 
 
@@ -110,6 +118,7 @@ async def add_evidence(
     minutes=60.0,
     prepared=True,
     c1=False,
+    quality_verified=False,
 ):
     seed = f"{profile.id}:{device.id}:{day}:{revision}:{evidence_state}"
     capture = F12RawEvidenceCapture(
@@ -169,12 +178,33 @@ async def add_evidence(
             status=HistoricalSubmissionStatus.PROCESSED,
             attempts=1,
             analytics_evaluation_id=f"eval-{day.isoformat()}",
-            analytics_response={"status": "processed"},
+            analytics_response={
+                "status": "processed",
+                "result": {
+                    "evaluation": {
+                        "outcome": "ABSTAIN",
+                        "abstention_reason": "INSUFFICIENT_HISTORY",
+                    }
+                },
+            },
         )
         db.add(submission)
         await db.flush()
 
+    preparation_id = uuid.uuid4()
+    required_quality_checks = {
+        "original_integrity": True,
+        "authenticated_binding": True,
+        "local_day_closed": True,
+        "captured_next_local_day": True,
+        "initial_state_known": True,
+        "continuous_query_coverage": True,
+        "device_lifecycle_clear": True,
+        "reconstruction_valid": True,
+        "revision_unambiguous": True,
+    }
     preparation = F12EvidencePreparation(
+        id=preparation_id,
         evidence_id=capture.id,
         request_id=body["request_id"],
         preparer_commit="94ff3a8" * 5 + "94ff3",
@@ -192,7 +222,34 @@ async def add_evidence(
         historical_submission_id=submission.id if submission else None,
         submission_linked_at=datetime.now(UTC) if submission else None,
         submission_body=body,
-        audit={"fixture": True},
+        audit={
+            "fixture": True,
+            **(
+                {
+                    "operational_quality": {
+                        "schema_version": 1,
+                        "policy_version": F12_OPERATIONAL_QUALITY_POLICY_VERSION,
+                        "quality_verified": True,
+                        "reason_codes": ["QUALITY_VERIFIED"],
+                        "checks": required_quality_checks,
+                        "evaluated_at": datetime.now(UTC).isoformat(),
+                        "evidence_id": str(capture.id),
+                        "capture_id": capture.capture_id,
+                        "preparation_id": str(preparation_id),
+                        "profile_id": str(profile.id),
+                        "device_id": str(device.id),
+                        "local_date": day.isoformat(),
+                        "time_zone": capture.time_zone,
+                        "revision": revision,
+                        "evidence_content_sha256": capture.content_sha256,
+                        "source_created_at": capture.source_created_at.isoformat(),
+                        "received_at": capture.received_at.isoformat(),
+                    }
+                }
+                if quality_verified
+                else {}
+            ),
+        },
     )
     db.add(preparation)
     await db.flush()
@@ -246,10 +303,11 @@ async def test_empty_window_has_exact_dates_and_never_substitutes_zero(db_sessio
     assert {item.code for item in result.blockers} >= {
         "SERIES_NOT_FOUND",
         "F12_DAYS_UNAVAILABLE",
-        "QUALITY_POLICY_UNDEFINED",
+        "F12_QUALITY_NOT_VERIFIED",
         "ASSIGNMENT_HISTORY_MISSING",
         "SHARED_PHONE_HISTORY_MISSING",
         "CONTEXT_HISTORY_MISSING",
+        "CONSENT_HISTORY_MISSING",
     }
 
 
@@ -427,3 +485,110 @@ async def test_diagnostic_is_read_only_and_creates_no_weekly_job(db_session):
     assert before == after == 0
     assert not db_session.new
     assert not db_session.dirty
+
+
+@pytest.mark.asyncio
+async def test_c1_abstain_does_not_invalidate_operational_daily_quality(db_session):
+    profile, device = await create_profile(db_session)
+    await add_evidence(
+        db_session,
+        profile,
+        device,
+        WINDOW_START,
+        c1=True,
+        quality_verified=True,
+    )
+    await db_session.commit()
+
+    result = await service(db_session).diagnose(
+        profile_id=profile.id,
+        evaluation_date=EVALUATION_DATE,
+    )
+
+    assert result.days[0].quality_verified is True
+    assert result.days[0].quality_reason_codes == ["QUALITY_VERIFIED"]
+    assert result.days[0].c1_evaluation_id == "eval-2026-01-05"
+@pytest.mark.asyncio
+async def test_complete_quality_declarations_and_consent_make_window_ready(db_session):
+    profile, device = await create_profile(db_session)
+    adult = AdultAccount(email=f"ready-window-{uuid.uuid4()}@example.com")
+    db_session.add(adult)
+    await db_session.flush()
+    for offset in range(28):
+        await add_evidence(
+            db_session,
+            profile,
+            device,
+            WINDOW_START + timedelta(days=offset),
+            quality_verified=True,
+        )
+    db_session.add(
+        AdultWeeklyDeclaration(
+            profile_id=profile.id,
+            device_id=device.id,
+            created_by_adult_id=adult.id,
+            revision=1,
+            time_zone="UTC",
+            effective_from=WINDOW_START,
+            effective_to=EVALUATION_DATE - timedelta(days=1),
+            assignment_verified=True,
+            shared_phone=False,
+            context_declared=False,
+            created_at=datetime(2026, 1, 4, tzinfo=UTC),
+        )
+    )
+    consent = Consent(
+        adult_id=adult.id,
+        profile_id=profile.id,
+        status=ConsentStatus.ACTIVE,
+        privacy_notice_version="test",
+        granted_at=datetime(2026, 1, 4, tzinfo=UTC),
+    )
+    consent.purposes = [
+        ConsentPurpose(purpose=ConsentPurposeType.USAGE_MONITORING)
+    ]
+    db_session.add(consent)
+    await db_session.commit()
+
+    result = await service(db_session).diagnose(
+        profile_id=profile.id,
+        evaluation_date=EVALUATION_DATE,
+    )
+
+    assert all(day.quality_verified for day in result.days)
+    assert result.declarations.consent.complete_for_window is True
+    assert result.declarations.consent.contract_value is True
+    assert result.blockers == []
+    assert result.evaluation_ready is True
+
+
+@pytest.mark.asyncio
+async def test_consent_granted_mid_window_reports_prior_local_days_missing(db_session):
+    profile, device = await create_profile(db_session)
+    adult = AdultAccount(email=f"partial-consent-{uuid.uuid4()}@example.com")
+    db_session.add(adult)
+    await db_session.flush()
+    await add_evidence(db_session, profile, device, WINDOW_START)
+    grant_day = WINDOW_START + timedelta(days=5)
+    consent = Consent(
+        adult_id=adult.id,
+        profile_id=profile.id,
+        status=ConsentStatus.ACTIVE,
+        privacy_notice_version="test",
+        granted_at=datetime.combine(grant_day, time.min, tzinfo=UTC),
+    )
+    consent.purposes = [
+        ConsentPurpose(purpose=ConsentPurposeType.USAGE_MONITORING)
+    ]
+    db_session.add(consent)
+    await db_session.commit()
+
+    result = await service(db_session).diagnose(
+        profile_id=profile.id,
+        evaluation_date=EVALUATION_DATE,
+    )
+
+    assert result.declarations.consent.missing_dates == [
+        WINDOW_START + timedelta(days=offset) for offset in range(5)
+    ]
+    assert result.declarations.consent.problem == "CONSENT_HISTORY_MISSING"
