@@ -56,7 +56,10 @@ class AdultMessageHistoricalDeclaration(_DiagnosticModel):
     historical_records_present: bool
     complete_for_window: bool
     current_state_present: bool
-    problem: str
+    covered_dates: list[date]
+    missing_dates: list[date]
+    revisions: list[int]
+    problem: str | None
 
 
 class AdultMessageDeclarationDiagnostic(_DiagnosticModel):

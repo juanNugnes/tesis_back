@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import (
+    AdultWeeklyDeclaration,
     AutomaticOfferSettings,
     Device,
     F12EvidencePreparation,
@@ -72,6 +73,31 @@ class AdultMessageWindowRepository:
                 ),
             )
             .order_by(ProfileContext.start_date.asc(), ProfileContext.id.asc())
+        )
+        return list((await self.db.scalars(query)).all())
+
+    async def list_weekly_declarations(
+        self,
+        profile_id: uuid.UUID,
+        *,
+        date_from: date,
+        date_to: date,
+    ) -> list[AdultWeeklyDeclaration]:
+        query = (
+            select(AdultWeeklyDeclaration)
+            .where(
+                AdultWeeklyDeclaration.profile_id == profile_id,
+                AdultWeeklyDeclaration.effective_from <= date_to,
+                (
+                    AdultWeeklyDeclaration.effective_to.is_(None)
+                    | (AdultWeeklyDeclaration.effective_to >= date_from)
+                ),
+                (
+                    AdultWeeklyDeclaration.revoked_effective_date.is_(None)
+                    | (AdultWeeklyDeclaration.revoked_effective_date > date_from)
+                ),
+            )
+            .order_by(AdultWeeklyDeclaration.revision.asc())
         )
         return list((await self.db.scalars(query)).all())
 

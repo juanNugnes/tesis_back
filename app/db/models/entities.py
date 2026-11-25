@@ -585,6 +585,74 @@ class AutomaticOfferSettings(Base):
     )
 
 
+class AdultWeeklyDeclaration(Base):
+    """Versioned adult assertions used only for future weekly windows."""
+
+    __tablename__ = "adult_weekly_declarations"
+    __table_args__ = (
+        CheckConstraint(
+            "revision > 0",
+            name="revision_positive",
+        ),
+        CheckConstraint(
+            "effective_to IS NULL OR effective_to >= effective_from",
+            name="effective_range",
+        ),
+        CheckConstraint(
+            "(revoked_at IS NULL AND revoked_effective_date IS NULL "
+            "AND revoked_by_adult_id IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revoked_effective_date IS NOT NULL "
+            "AND revoked_by_adult_id IS NOT NULL)",
+            name="revocation_complete",
+        ),
+        UniqueConstraint(
+            "profile_id",
+            "revision",
+            name="uq_adult_weekly_declarations_profile_revision",
+        ),
+        Index(
+            "ix_adult_weekly_declarations_profile_period",
+            "profile_id",
+            "effective_from",
+            "effective_to",
+        ),
+        Index(
+            "ix_adult_weekly_declarations_device_period",
+            "device_id",
+            "effective_from",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("devices.id", ondelete="RESTRICT"), index=True
+    )
+    created_by_adult_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("adult_accounts.id", ondelete="RESTRICT"), index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer)
+    effective_from: Mapped[date] = mapped_column(Date)
+    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    assignment_verified: Mapped[bool] = mapped_column(Boolean)
+    shared_phone: Mapped[bool] = mapped_column(Boolean)
+    context_declared: Mapped[bool] = mapped_column(Boolean)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_effective_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    revoked_by_adult_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("adult_accounts.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+
+
 class ActivityOfferItem(Base):
     __tablename__ = "activity_offer_items"
     __table_args__ = (

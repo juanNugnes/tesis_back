@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.api.routes import adult_auth, adult_profile_links, adult_profiles, alerts, analysis, consents, device_links, devices, experimental_pmum, profile_activity_preferences, profile_activity_selections, profile_activity_suggestions, profile_contexts, profile_f12_evidence, profile_historical_submissions, profile_settings, profiles, usage
 from app.api.routes import profile_adult_messages
 from app.api.routes import profile_child_offers
+from app.api.routes import profile_adult_weekly_declarations
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.f12_automatic_processing import F12AutomaticProcessingWorker
@@ -53,6 +54,7 @@ for router in (
     adult_profile_links.router,
     adult_profiles.router,
     profile_adult_messages.router,
+    profile_adult_weekly_declarations.router,
     profile_child_offers.router,
     device_links.router,
     devices.router,

@@ -363,8 +363,9 @@ async def test_single_series_reports_real_f12_states_corrections_and_declaration
     assert result.declarations.assignment.contract_value is None
     assert result.declarations.shared_phone.current_state_present is True
     assert result.declarations.shared_phone.contract_value is None
-    assert result.declarations.family_context.historical_records_present is True
-    assert result.declarations.family_context.problem == "CONTEXT_MAPPING_UNDEFINED"
+    assert result.declarations.family_context.historical_records_present is False
+    assert result.declarations.family_context.current_state_present is True
+    assert result.declarations.family_context.problem == "CONTEXT_HISTORY_MISSING"
     assert result.declarations.context_records[0].type == "ROUTINE_CHANGE"
     assert "F12_CORRECTIONS_PENDING" in {item.code for item in result.blockers}
     assert result.evaluation_ready is False

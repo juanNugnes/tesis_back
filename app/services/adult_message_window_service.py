@@ -59,6 +59,11 @@ class AdultMessageWindowService:
             date_from=window_start,
             date_to=window_end,
         )
+        weekly_declarations = await self.repository.list_weekly_declarations(
+            profile_id,
+            date_from=window_start,
+            date_to=window_end,
+        )
         candidates = self._series_candidates(evidence)
         selected = candidates[0] if len(candidates) == 1 else None
 
@@ -91,6 +96,9 @@ class AdultMessageWindowService:
         )
         declarations = self._declarations(
             contexts,
+            weekly_declarations,
+            selected=selected,
+            dates=dates,
             current_device=current_device,
             current_shared_phone=current_shared_phone,
         )
@@ -393,7 +401,10 @@ class AdultMessageWindowService:
     @staticmethod
     def _declarations(
         contexts,
+        weekly_declarations,
         *,
+        selected,
+        dates,
         current_device: bool,
         current_shared_phone: bool,
     ) -> AdultMessageDeclarationDiagnostic:
@@ -405,30 +416,94 @@ class AdultMessageWindowService:
             )
             for item in contexts
         ]
+        relevant = [
+            item
+            for item in weekly_declarations
+            if selected is not None and item.device_id == selected.device_id
+        ]
         return AdultMessageDeclarationDiagnostic(
-            assignment=AdultMessageHistoricalDeclaration(
-                historical_records_present=False,
-                complete_for_window=False,
+            assignment=AdultMessageWindowService._declaration_coverage(
+                relevant,
+                dates,
+                field="assignment_verified",
                 current_state_present=current_device,
-                problem="ASSIGNMENT_HISTORY_MISSING",
+                missing_problem="ASSIGNMENT_HISTORY_MISSING",
+                changed_problem="ASSIGNMENT_CHANGED_WITHIN_WINDOW",
+                disallowed_value=False,
+                disallowed_problem="ASSIGNMENT_NOT_VERIFIED",
             ),
-            shared_phone=AdultMessageHistoricalDeclaration(
-                historical_records_present=False,
-                complete_for_window=False,
+            shared_phone=AdultMessageWindowService._declaration_coverage(
+                relevant,
+                dates,
+                field="shared_phone",
                 current_state_present=current_shared_phone,
-                problem="SHARED_PHONE_HISTORY_MISSING",
+                missing_problem="SHARED_PHONE_HISTORY_MISSING",
+                changed_problem="SHARED_PHONE_CHANGED_WITHIN_WINDOW",
+                disallowed_value=True,
+                disallowed_problem="SHARED_PHONE_DECLARED",
             ),
-            family_context=AdultMessageHistoricalDeclaration(
-                historical_records_present=bool(context_records),
-                complete_for_window=False,
+            family_context=AdultMessageWindowService._declaration_coverage(
+                relevant,
+                dates,
+                field="context_declared",
                 current_state_present=bool(context_records),
-                problem=(
-                    "CONTEXT_MAPPING_UNDEFINED"
-                    if context_records
-                    else "CONTEXT_HISTORY_MISSING"
-                ),
+                missing_problem="CONTEXT_HISTORY_MISSING",
+                changed_problem="CONTEXT_CHANGED_WITHIN_WINDOW",
             ),
             context_records=context_records,
+        )
+
+    @staticmethod
+    def _declaration_coverage(
+        declarations,
+        dates,
+        *,
+        field,
+        current_state_present,
+        missing_problem,
+        changed_problem,
+        disallowed_value=None,
+        disallowed_problem=None,
+    ) -> AdultMessageHistoricalDeclaration:
+        selected_by_date = {}
+        for day in dates:
+            applicable = [
+                item
+                for item in declarations
+                if item.effective_from <= day
+                and (item.effective_to is None or item.effective_to >= day)
+                and (
+                    item.revoked_effective_date is None
+                    or item.revoked_effective_date > day
+                )
+            ]
+            if applicable:
+                selected_by_date[day] = max(
+                    applicable, key=lambda item: item.revision
+                )
+        covered_dates = sorted(selected_by_date)
+        missing_dates = [day for day in dates if day not in selected_by_date]
+        values = {
+            bool(getattr(item, field)) for item in selected_by_date.values()
+        }
+        contract_value = next(iter(values)) if len(values) == 1 else None
+        if missing_dates:
+            problem = missing_problem
+        elif len(values) != 1:
+            problem = changed_problem
+        elif disallowed_problem is not None and contract_value == disallowed_value:
+            problem = disallowed_problem
+        else:
+            problem = None
+        return AdultMessageHistoricalDeclaration(
+            contract_value=contract_value,
+            historical_records_present=bool(declarations),
+            complete_for_window=not missing_dates,
+            current_state_present=current_state_present,
+            covered_dates=covered_dates,
+            missing_dates=missing_dates,
+            revisions=sorted({item.revision for item in selected_by_date.values()}),
+            problem=problem,
         )
 
     @staticmethod
@@ -482,13 +557,16 @@ class AdultMessageWindowService:
             declarations.shared_phone,
             declarations.family_context,
         ):
-            blockers.append(
-                AdultMessageWindowBlocker(
-                    code=declaration.problem,
-                    dates=[],
-                    detail="A historical declaration cannot be derived from current state",
+            if declaration.problem is not None:
+                blockers.append(
+                    AdultMessageWindowBlocker(
+                        code=declaration.problem,
+                        dates=declaration.missing_dates,
+                        detail=(
+                            "A historical declaration cannot be derived from current state"
+                        ),
+                    )
                 )
-            )
         return blockers
 
     @staticmethod
