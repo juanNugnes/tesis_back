@@ -54,7 +54,7 @@ class AdultMessageEvaluationRequest(_AnalyticsModel):
         return value
 
     @model_validator(mode="after")
-    def controlled_window_is_exact(self):
+    def evaluation_window_is_exact(self):
         try:
             zone = ZoneInfo(self.time_zone)
         except (ZoneInfoNotFoundError, ValueError):
@@ -69,7 +69,7 @@ class AdultMessageEvaluationRequest(_AnalyticsModel):
         ]
         if [row.date for row in self.days] != expected:
             raise ValueError(
-                "controlled fixture must contain the 28 consecutive prior local days"
+                "evaluation must contain the 28 consecutive prior local days"
             )
         for row in self.days:
             if row.observed:
@@ -95,7 +95,7 @@ class AdultMessageEvaluationRequest(_AnalyticsModel):
             allow_nan=False,
         ).encode("utf-8")
         if len(encoded) > 16_384:
-            raise ValueError("controlled request exceeds the Analytics HTTP limit")
+            raise ValueError("evaluation request exceeds the Analytics HTTP limit")
         return self
 
 

@@ -14,7 +14,10 @@ from app.repositories.adult_message_evaluation_repository import (
     AdultMessageEvaluationIntegrityError,
     AdultMessageEvaluationRepository,
 )
-from app.schemas.adult_message import ControlledAdultMessageFixture
+from app.schemas.adult_message import (
+    AdultMessageEvaluationRequest,
+    ControlledAdultMessageFixture,
+)
 from app.services.adult_messages_client import AdultMessagesClient
 
 
@@ -66,7 +69,7 @@ def canonical_hash(value: object) -> str:
 
 
 class AdultMessageEvaluationService:
-    """Durable manual transport for explicitly fictitious controlled fixtures."""
+    """Durable transport for frozen fictional or real-verified requests."""
 
     def __init__(
         self,
@@ -80,42 +83,97 @@ class AdultMessageEvaluationService:
         self, fixture: ControlledAdultMessageFixture
     ) -> AdultMessageEvaluationJob:
         payload = fixture.payload.model_dump(mode="json")
+        fixture_body = fixture.model_dump(mode="json")
+        return await self._create_job(
+            request=fixture.payload,
+            payload=payload,
+            source="FICTIONAL",
+            fixture_id=fixture.fixture_id,
+            fixture_sha256=canonical_hash(fixture_body),
+            window_fingerprint=None,
+            traceability=None,
+        )
+
+    async def create_from_verified_window(
+        self,
+        request: AdultMessageEvaluationRequest,
+        *,
+        window_fingerprint: str,
+        traceability: dict,
+    ) -> AdultMessageEvaluationJob:
+        if (
+            len(window_fingerprint) != 64
+            or any(character not in "0123456789abcdef" for character in window_fingerprint)
+            or canonical_hash(traceability) != window_fingerprint
+            or request.request_id != f"adult-msg-real-{window_fingerprint}"
+        ):
+            raise AdultMessageEvaluationContentConflictError(
+                "real window identity does not match its frozen traceability"
+            )
+        return await self._create_job(
+            request=request,
+            payload=request.model_dump(mode="json"),
+            source="REAL_VERIFIED",
+            fixture_id=None,
+            fixture_sha256=None,
+            window_fingerprint=window_fingerprint,
+            traceability=traceability,
+        )
+
+    async def _create_job(
+        self,
+        *,
+        request: AdultMessageEvaluationRequest,
+        payload: dict,
+        source: str,
+        fixture_id: str | None,
+        fixture_sha256: str | None,
+        window_fingerprint: str | None,
+        traceability: dict | None,
+    ) -> AdultMessageEvaluationJob:
         try:
             profile_id = uuid.UUID(payload["profile_id"])
         except (ValueError, AttributeError):
             raise AdultMessageEvaluationProfileError(
-                "fixture profile_id must be a UUID"
+                "evaluation profile_id must be a UUID"
             ) from None
         if str(profile_id) != payload["profile_id"]:
             raise AdultMessageEvaluationProfileError(
-                "fixture profile_id must use canonical UUID form"
+                "evaluation profile_id must use canonical UUID form"
             )
         payload_sha256 = canonical_hash(payload)
-        fixture_body = fixture.model_dump(mode="json")
-        fixture_sha256 = canonical_hash(fixture_body)
-        request_id = fixture.payload.request_id
+        request_id = request.request_id
 
         async with _JobLockRegistry.get(f"create:{profile_id}"):
             profile = await self.repository.lock_profile(profile_id)
             if profile is None or not profile.active:
                 await self.repository.db.rollback()
                 raise AdultMessageEvaluationProfileError(
-                    "fixture profile does not exist or is inactive"
+                    "evaluation profile does not exist or is inactive"
                 )
 
             existing = await self.repository.get_by_request_id(request_id)
-            fixture_existing = await self.repository.get_by_fixture_id(
-                fixture.fixture_id
+            source_existing = (
+                await self.repository.get_by_fixture_id(fixture_id)
+                if source == "FICTIONAL" and fixture_id is not None
+                else await self.repository.get_by_window_fingerprint(
+                    window_fingerprint
+                )
+                if source == "REAL_VERIFIED" and window_fingerprint is not None
+                else None
             )
-            if existing is not None or fixture_existing is not None:
-                candidate = existing or fixture_existing
+            if existing is not None or source_existing is not None:
+                candidate = existing or source_existing
                 if (
                     existing is None
-                    or fixture_existing is None
-                    or existing.id != fixture_existing.id
+                    or source_existing is None
+                    or existing.id != source_existing.id
                     or candidate.profile_id != profile_id
-                    or candidate.fixture_id != fixture.fixture_id
+                    or candidate.source != source
+                    or candidate.fixture_id != fixture_id
                     or candidate.fixture_sha256 != fixture_sha256
+                    or candidate.window_fingerprint != window_fingerprint
+                    or candidate.traceability != traceability
                     or candidate.payload_sha256 != payload_sha256
                     or candidate.payload != payload
                 ):
@@ -139,7 +197,7 @@ class AdultMessageEvaluationService:
                 )
 
             processed = await self.repository.processed_for_series(
-                profile_id, fixture.payload.series_id
+                profile_id, request.series_id
             )
             try:
                 self._validate_order_and_revisions(payload, processed)
@@ -147,12 +205,15 @@ class AdultMessageEvaluationService:
                 await self.repository.db.rollback()
                 raise
             job = AdultMessageEvaluationJob(
-                fixture_id=fixture.fixture_id,
+                source=source,
+                fixture_id=fixture_id,
                 fixture_sha256=fixture_sha256,
+                window_fingerprint=window_fingerprint,
+                traceability=traceability,
                 request_id=request_id,
                 profile_id=profile_id,
-                series_id=fixture.payload.series_id,
-                evaluation_date=fixture.payload.evaluation_date,
+                series_id=request.series_id,
+                evaluation_date=request.evaluation_date,
                 payload=payload,
                 payload_sha256=payload_sha256,
                 status=AdultMessageEvaluationJobStatus.PENDING,
@@ -164,8 +225,11 @@ class AdultMessageEvaluationService:
                 if (
                     existing is not None
                     and existing.profile_id == profile_id
-                    and existing.fixture_id == fixture.fixture_id
+                    and existing.source == source
+                    and existing.fixture_id == fixture_id
                     and existing.fixture_sha256 == fixture_sha256
+                    and existing.window_fingerprint == window_fingerprint
+                    and existing.traceability == traceability
                     and existing.payload_sha256 == payload_sha256
                     and existing.payload == payload
                 ):

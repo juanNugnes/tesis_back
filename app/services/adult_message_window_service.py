@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
@@ -259,6 +261,8 @@ class AdultMessageWindowService:
             raw_evidence_state=latest.evidence_state,
             unavailable_reason=latest.unavailable_reason,
             evidence_id=latest.id,
+            capture_id=latest.capture_id,
+            evidence_content_sha256=latest.content_sha256,
             revision=latest.revision,
             available_revisions=revisions,
             candidate_evidence_count=len(all_evidence),
@@ -370,6 +374,7 @@ class AdultMessageWindowService:
             quality_policy_version=quality[1],
             quality_reason_codes=quality[2],
             quality_evaluated_at=quality[3],
+            quality_audit_sha256=quality[4],
             problems=[
                 *([] if quality[0] else [f"F12_QUALITY:{code}" for code in quality[2]]),
                 *[
@@ -520,6 +525,9 @@ class AdultMessageWindowService:
             covered_dates=covered_dates,
             missing_dates=missing_dates,
             revisions=sorted({item.revision for item in selected_by_date.values()}),
+            record_ids=sorted(
+                {item.id for item in selected_by_date.values()}, key=str
+            ),
             problem=problem,
         )
 
@@ -534,6 +542,7 @@ class AdultMessageWindowService:
                 covered_dates=[],
                 missing_dates=list(dates),
                 revisions=[],
+                record_ids=[],
                 problem="CONSENT_HISTORY_MISSING",
             )
         from zoneinfo import ZoneInfo
@@ -585,6 +594,7 @@ class AdultMessageWindowService:
             covered_dates=covered_dates,
             missing_dates=missing_dates,
             revisions=[],
+            record_ids=sorted({item.id for item in consents}, key=str),
             problem="CONSENT_HISTORY_MISSING" if missing_dates else None,
         )
 
@@ -660,7 +670,16 @@ class AdultMessageWindowService:
     def _quality_decision(evidence, preparation):
         raw = preparation.audit.get("operational_quality")
         if not isinstance(raw, dict):
-            return False, None, ["QUALITY_NOT_EVALUATED"], None
+            return False, None, ["QUALITY_NOT_EVALUATED"], None, None
+        audit_sha256 = hashlib.sha256(
+            json.dumps(
+                raw,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
         policy = raw.get("policy_version")
         reasons = raw.get("reason_codes")
         checks = raw.get("checks")
@@ -700,13 +719,19 @@ class AdultMessageWindowService:
             bindings_match = False
             evaluated_at = None
         if not bindings_match or type(raw.get("quality_verified")) is not bool:
-            return False, policy if isinstance(policy, str) else None, ["QUALITY_AUDIT_INVALID"], evaluated_at
+            return (
+                False,
+                policy if isinstance(policy, str) else None,
+                ["QUALITY_AUDIT_INVALID"],
+                evaluated_at,
+                audit_sha256,
+            )
         verified = (
             raw["quality_verified"] is True
             and reasons == ["QUALITY_VERIFIED"]
             and all(checks.get(name) is True for name in required_checks)
         )
-        return verified, policy, list(reasons), evaluated_at
+        return verified, policy, list(reasons), evaluated_at, audit_sha256
 
     @staticmethod
     def _utc(value: datetime) -> datetime:

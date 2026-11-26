@@ -31,6 +31,8 @@ class AdultMessageWindowDay(_DiagnosticModel):
     raw_evidence_state: Literal["ABSENT", "AVAILABLE", "UNAVAILABLE"]
     unavailable_reason: str | None
     evidence_id: uuid.UUID | None
+    capture_id: str | None = None
+    evidence_content_sha256: str | None = None
     revision: int | None
     available_revisions: list[int]
     f12_status: F12DayStatus
@@ -40,6 +42,7 @@ class AdultMessageWindowDay(_DiagnosticModel):
     quality_policy_version: str | None = None
     quality_reason_codes: list[str] = Field(default_factory=list)
     quality_evaluated_at: datetime | None = None
+    quality_audit_sha256: str | None = None
     preparation_id: uuid.UUID | None
     historical_submission_id: uuid.UUID | None
     historical_submission_status: str | None
@@ -62,6 +65,7 @@ class AdultMessageHistoricalDeclaration(_DiagnosticModel):
     covered_dates: list[date]
     missing_dates: list[date]
     revisions: list[int]
+    record_ids: list[uuid.UUID] = Field(default_factory=list)
     problem: str | None
 
 

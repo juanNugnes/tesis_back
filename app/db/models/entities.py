@@ -784,13 +784,21 @@ class HistoricalSubmission(Base):
 
 
 class AdultMessageEvaluationJob(Base):
-    """Frozen, development-only transport operation for a fictitious fixture."""
+    """Frozen transport operation for fictitious or real verified windows."""
 
     __tablename__ = "adult_message_evaluation_jobs"
     __table_args__ = (
         CheckConstraint(
             "attempts >= 0",
             name="ck_adult_message_evaluation_jobs_attempts_non_negative",
+        ),
+        CheckConstraint(
+            "(source = 'FICTIONAL' AND fixture_id IS NOT NULL "
+            "AND fixture_sha256 IS NOT NULL AND window_fingerprint IS NULL) OR "
+            "(source = 'REAL_VERIFIED' AND fixture_id IS NULL "
+            "AND fixture_sha256 IS NULL AND window_fingerprint IS NOT NULL "
+            "AND traceability IS NOT NULL)",
+            name="ck_adult_message_evaluation_jobs_source_metadata",
         ),
         Index(
             "ix_adult_message_evaluation_jobs_profile_status",
@@ -805,8 +813,19 @@ class AdultMessageEvaluationJob(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    fixture_id: Mapped[str] = mapped_column(String(128), unique=True)
-    fixture_sha256: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(
+        String(20), default="FICTIONAL", server_default="FICTIONAL"
+    )
+    fixture_id: Mapped[str | None] = mapped_column(
+        String(128), unique=True, nullable=True
+    )
+    fixture_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    window_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True
+    )
+    traceability: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
     request_id: Mapped[str] = mapped_column(String(128), unique=True)
     profile_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("profiles.id", ondelete="RESTRICT"),

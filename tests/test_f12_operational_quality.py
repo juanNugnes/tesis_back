@@ -56,9 +56,8 @@ def _event(run_id, begin, end, collected, when, code, ordinal):
     }
 
 
-def _pair(begin, end, events, *, error_code=None, run_id=None):
+def _pair(begin, end, events, *, collected, error_code=None, run_id=None):
     run_id = run_id or str(uuid.uuid4())
-    collected = DAY_END + 60_000
     rows = [
         _event(run_id, begin, end, collected, when, code, ordinal)
         for ordinal, (when, code) in enumerate(events)
@@ -86,28 +85,38 @@ def _pair(begin, end, events, *, error_code=None, run_id=None):
 
 def quality_fixture(
     *,
+    day=DAY,
     status="OBSERVED",
     include_prior=True,
-    prior_query_end=DAY_START,
+    prior_query_end=None,
     lifecycle=False,
     auxiliary_error=False,
     source_day_offset=1,
     received_day_offset=3,
     revision=1,
+    observed_minutes=60,
 ):
+    day_start = int(datetime.combine(day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000)
+    day_end = int(
+        datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=UTC).timestamp()
+        * 1000
+    )
+    prior_query_end = day_start if prior_query_end is None else prior_query_end
+    collected = day_end + 60_000
     evidence_id = uuid.uuid4()
     profile_id = uuid.uuid4()
     device_id = uuid.uuid4()
-    source_created_at = datetime(2026, 1, 5, tzinfo=UTC) + timedelta(
+    source_created_at = datetime.combine(day, datetime.min.time(), tzinfo=UTC) + timedelta(
         days=source_day_offset, minutes=2
     )
     pairs = []
     if include_prior:
         pairs.append(
             _pair(
-                DAY_START - 2 * 60 * 60 * 1000,
+                day_start - 2 * 60 * 60 * 1000,
                 prior_query_end,
-                [(DAY_START - 60 * 60 * 1000, 16)],
+                [(day_start - 60 * 60 * 1000, 16)],
+                collected=collected,
             )
         )
     day_events = []
@@ -115,21 +124,26 @@ def quality_fixture(
     if status == "OBSERVED":
         day_events.extend(
             [
-                (DAY_START + 60 * 60 * 1000, 15),
-                (DAY_START + 2 * 60 * 60 * 1000, 16),
+                (day_start + 60 * 60 * 1000, 15),
+                (
+                    day_start
+                    + (60 + observed_minutes) * 60 * 1000,
+                    16,
+                ),
             ]
         )
-        minutes = 60.0
+        minutes = float(observed_minutes)
     if lifecycle:
-        day_events.append((DAY_START + 3 * 60 * 60 * 1000, 27))
+        day_events.append((day_start + 3 * 60 * 60 * 1000, 27))
         day_events.sort()
-    pairs.append(_pair(DAY_START, DAY_END, day_events))
+    pairs.append(_pair(day_start, day_end, day_events, collected=collected))
     if auxiliary_error:
         pairs.append(
             _pair(
-                DAY_START + 3 * 60 * 60 * 1000,
-                DAY_START + 4 * 60 * 60 * 1000,
+                day_start + 3 * 60 * 60 * 1000,
+                day_start + 4 * 60 * 60 * 1000,
                 [],
+                collected=collected,
                 error_code="QUERY_RUNTIME_EXCEPTION",
             )
         )
@@ -158,11 +172,11 @@ def quality_fixture(
     capture = F12RawEvidenceCapture(
         id=evidence_id,
         capture_id=expected_capture_id(
-            profile_id, device_id, DAY, revision, content_sha256
+            profile_id, device_id, day, revision, content_sha256
         ),
         profile_id=profile_id,
         device_id=device_id,
-        local_date=DAY,
+        local_date=day,
         time_zone="UTC",
         revision=revision,
         envelope_version=1,
@@ -173,7 +187,7 @@ def quality_fixture(
         pair_count=len(models),
         total_bytes=sum(item.summary_size + item.events_size for item in models),
         source_created_at=source_created_at,
-        received_at=datetime(2026, 1, 5, tzinfo=UTC)
+        received_at=datetime.combine(day, datetime.min.time(), tzinfo=UTC)
         + timedelta(days=received_day_offset),
         receipt_status="RECEIVED",
         pairs=models,
@@ -186,12 +200,17 @@ def quality_fixture(
             "time_zone": "UTC",
             "measurement_version": HISTORICAL_MEASUREMENT_VERSION,
             "representation": {
-                "representation_record_id": "rep-" + "b" * 64,
+                "representation_record_id": "rep-"
+                + hashlib.sha256(day.isoformat().encode()).hexdigest(),
                 "representation_spec_id": HISTORICAL_REPRESENTATION_SPEC_ID,
                 "subject_id": series_id,
                 "phenomenon": "DAILY_USE_DURATION",
-                "interval_start": datetime(2026, 1, 5, tzinfo=UTC).isoformat(),
-                "interval_end": datetime(2026, 1, 6, tzinfo=UTC).isoformat(),
+                "interval_start": datetime.combine(
+                    day, datetime.min.time(), tzinfo=UTC
+                ).isoformat(),
+                "interval_end": datetime.combine(
+                    day + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+                ).isoformat(),
                 "value": None if prepared_status == "MISSING" else minutes,
                 "unit": "minutes",
                 "status": prepared_status,

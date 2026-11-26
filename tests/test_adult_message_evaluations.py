@@ -281,6 +281,10 @@ async def test_create_is_durable_before_send_and_create_active(db_session):
     service, _ = make_service(db_session, analytics)
     fixture = fixture_for(profile.id)
     job = await service.create_from_fixture(fixture)
+    assert job.source == "FICTIONAL"
+    assert job.fixture_id == fixture.fixture_id
+    assert job.window_fingerprint is None
+    assert job.traceability is None
     assert job.status == AdultMessageEvaluationJobStatus.PENDING
     assert job.attempts == 0
     assert analytics.calls == []

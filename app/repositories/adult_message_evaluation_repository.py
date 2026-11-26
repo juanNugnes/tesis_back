@@ -42,6 +42,15 @@ class AdultMessageEvaluationRepository:
             )
         )
 
+    async def get_by_window_fingerprint(
+        self, window_fingerprint: str
+    ) -> AdultMessageEvaluationJob | None:
+        return await self.db.scalar(
+            select(AdultMessageEvaluationJob).where(
+                AdultMessageEvaluationJob.window_fingerprint == window_fingerprint
+            )
+        )
+
     async def lock_profile(self, profile_id: uuid.UUID) -> Profile | None:
         return await self.db.scalar(
             select(Profile)

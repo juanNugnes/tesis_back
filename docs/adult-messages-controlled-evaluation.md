@@ -76,10 +76,10 @@ no debe reemplazar una versión posterior `WITHDRAWN`.
 en Analytics, pero no agregan una tarjeta al historial adulto. Una lista vacía
 no demuestra que nunca se haya ejecutado una evaluación.
 
-## Pendiente para datos reales
+## Flujo real separado
 
-Faltan una política y evidencia durable para cierre/calidad diaria, asignación
-durante el período, uso compartido y contexto. También faltan la selección de
-serie real, construcción semanal, scheduler y operación de recuperación. Nada
-de esta etapa autoriza a promover `MEASURED`, `OBSERVED`, HTTP 200 o fecha pasada
-a evidencia verificada.
+El flujo ficticio permanece disponible y no puede transformarse en uno real.
+La producción desde originales F12 verificados, declaraciones y consentimiento
+históricos se documenta en `docs/adult-messages-real-producer.md`. Ese productor
+no promueve `MEASURED`, HTTP 200 ni snapshots `/usage` a evidencia verificada y
+todavía no tiene scheduler.
